@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "robot-agent"
+version = "0.1.0"
+description = "机器人 Agent Runtime 原型（类 dimOS 上层任务规划/调度/执行/监控框架）"
+readme = "README.md"
+requires-python = ">=3.11"
+# 核心运行时零依赖：仅使用标准库 + dataclasses，保证处处可运行、可复现
+dependencies = []
+
+[project.optional-dependencies]
+# 可选：真实 LLM 分解器（LLMPlanner）才需要，延迟 import
+llm = ["anthropic>=0.40"]
+# 开发/测试
+dev = ["pytest>=8", "pytest-cov>=5"]
+
+[project.scripts]
+robot-agent = "robot_agent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"

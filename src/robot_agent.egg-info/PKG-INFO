@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: robot-agent
+Version: 0.1.0
+Summary: 机器人 Agent Runtime 原型（类 dimOS 上层任务规划/调度/执行/监控框架）
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Provides-Extra: llm
+Requires-Dist: anthropic>=0.40; extra == "llm"
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Requires-Dist: pytest-cov>=5; extra == "dev"

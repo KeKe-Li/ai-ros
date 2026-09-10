@@ -6,17 +6,23 @@
     1) 单步失败先原地重试（最多 max_retries 次），应对瞬时故障；
     2) 重试仍失败则触发重规划——基于当前世界重新分解剩余目标（最多 max_replans 次）；
     3) 超出上限则任务判定为 FAILED。
+
+健壮性：技能/后端执行或后置条件校验抛出的任何异常都被捕获并转为失败结果，
+统一走上述恢复流程，绝不向上冒泡终止整个运行——这对接入真实后端（如 ROS2、
+存在通信/超时/资源冲突）尤为关键，也便于问题定位（异常单独记入 memory）。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping, Protocol
+from typing import Mapping, Protocol, Sequence
 
 from robot_agent.backends.base import RobotBackend
 from robot_agent.core.task import Task, TaskStatus
 from robot_agent.core.types import SkillResult
 from robot_agent.planning.base import Planner, SkillCall
+from robot_agent.planning.goal import parse_goal
+from robot_agent.runtime.events import RuntimeEvent, RuntimeObserver, StepRecord
 from robot_agent.runtime.monitor import ExecutionMonitor
 from robot_agent.runtime.task_manager import TaskManager
 from robot_agent.skills.manager import SkillManager
@@ -27,17 +33,6 @@ class MemorySink(Protocol):
     """记忆写入接口（可选依赖，避免运行时与具体 Memory 实现耦合）。"""
 
     def record(self, kind: str, **fields: object) -> None: ...
-
-
-@dataclass(frozen=True)
-class StepRecord:
-    """单步执行留痕，用于追溯与展示闭环过程。"""
-
-    skill: str
-    params: dict[str, object]
-    status: str
-    message: str
-    attempt: int
 
 
 @dataclass(frozen=True)
@@ -66,6 +61,7 @@ class AgentRuntime:
         task_manager: TaskManager | None = None,
         monitor: ExecutionMonitor | None = None,
         memory: MemorySink | None = None,
+        observers: Sequence[RuntimeObserver] | None = None,
         max_retries: int = 2,
         max_replans: int = 2,
     ) -> None:
@@ -75,20 +71,24 @@ class AgentRuntime:
         self._task_manager = task_manager or TaskManager()
         self._monitor = monitor or ExecutionMonitor()
         self._memory = memory
+        self._observers = tuple(observers or ())
         self._max_retries = max_retries
         self._max_replans = max_replans
 
     def run(self, goal: str, world: WorldState) -> RunReport:
         """执行一个目标，返回运行报告。"""
+        # 目标解析一次得到确定性判据；验证与规划从此解耦
+        goal_spec = parse_goal(goal, world)
         task = Task(goal).to(TaskStatus.RUNNING)
         self._remember("task_started", goal=goal)
+        self._emit(RuntimeEvent("task_started", world=world, goal=goal, task=task))
         trace: list[StepRecord] = []
         replans = 0
 
         plan = self._planner.plan(goal, world)
         while True:
             steps = self._task_manager.schedule(plan)
-            world, failed = self._execute(steps, world, trace)
+            world, failed = self._execute(steps, world, trace, goal)
             if failed is None:
                 break  # 所有步骤达标
             # 单步在重试后仍失败 → 尝试重规划
@@ -99,19 +99,34 @@ class AgentRuntime:
             replans += 1
             task = task.to(TaskStatus.RECOVERING)
             self._remember("replan", attempt=replans, after_skill=failed.skill)
+            self._emit(
+                RuntimeEvent(
+                    "replan",
+                    world=world,
+                    goal=goal,
+                    task=task,
+                    replans=replans,
+                    message=f"在 {failed.skill} 后重规划",
+                )
+            )
             plan = self._planner.plan(goal, world)
             task = task.to(TaskStatus.RUNNING)
             if plan.is_empty:
                 break  # 重规划发现目标已达成
 
         if not task.is_terminal:
-            if self._monitor.verify_goal(self._planner, goal, world):
+            if self._monitor.verify_goal(goal_spec, world):
                 task = task.to(TaskStatus.SUCCEEDED)
                 self._remember("task_succeeded", goal=goal)
             else:
                 task = task.to(TaskStatus.FAILED, error="目标未达成")
                 self._remember("task_failed", reason=task.error)
 
+        self._emit(
+            RuntimeEvent(
+                "task_finished", world=world, goal=goal, task=task, replans=replans
+            )
+        )
         return RunReport(
             task=task, world=world, trace=tuple(trace), replans=replans
         )
@@ -119,35 +134,38 @@ class AgentRuntime:
     # --- 内部执行 ---
 
     def _execute(
-        self, steps: list[SkillCall], world: WorldState, trace: list[StepRecord]
+        self,
+        steps: list[SkillCall],
+        world: WorldState,
+        trace: list[StepRecord],
+        goal: str,
     ) -> tuple[WorldState, SkillCall | None]:
         """顺序执行步骤，返回 (最新世界, 失败步骤或 None)。"""
         for step in steps:
-            world, ok = self._run_with_retry(step, world, trace)
+            world, ok = self._run_with_retry(step, world, trace, goal)
             if not ok:
                 return world, step
         return world, None
 
     def _run_with_retry(
-        self, step: SkillCall, world: WorldState, trace: list[StepRecord]
+        self,
+        step: SkillCall,
+        world: WorldState,
+        trace: list[StepRecord],
+        goal: str,
     ) -> tuple[WorldState, bool]:
         """执行单步，失败则原地重试至上限。"""
-        skill = self._skills.get(step.skill)
         attempt = 0
         while True:
-            result, new_world = self._skills.invoke(
-                step.skill, self._backend, world, step.params
+            result, new_world, passed = self._try_step(step, world)
+            record = StepRecord(
+                skill=step.skill,
+                params=dict(step.params),
+                status="ok" if passed else "failed",
+                message=result.message,
+                attempt=attempt,
             )
-            passed = self._monitor.check(result, skill, new_world, step.params)
-            trace.append(
-                StepRecord(
-                    skill=step.skill,
-                    params=dict(step.params),
-                    status="ok" if passed else "failed",
-                    message=result.message,
-                    attempt=attempt,
-                )
-            )
+            trace.append(record)
             self._remember(
                 "step",
                 skill=step.skill,
@@ -155,12 +173,56 @@ class AgentRuntime:
                 message=result.message,
                 attempt=attempt,
             )
+            # 异常单独留痕，便于问题定位
+            if "exception" in result.data:
+                self._remember(
+                    "exception", skill=step.skill, error=result.message, attempt=attempt
+                )
+            # 实时发出步骤事件，携带结果后的世界供上位机渲染
+            self._emit(
+                RuntimeEvent(
+                    "step_result",
+                    world=new_world if passed else world,
+                    goal=goal,
+                    step=record,
+                )
+            )
             if passed:
                 return new_world, True
             attempt += 1
             if attempt > self._max_retries:
                 return world, False  # 保持失败前的世界，交由重规划处理
 
+    def _try_step(
+        self, step: SkillCall, world: WorldState
+    ) -> tuple[SkillResult, WorldState, bool]:
+        """执行并判定单步；捕获一切异常转为失败，绝不向上抛。
+
+        Returns:
+            (结果, 新世界, 是否达标)。异常时世界保持不变、达标为 False。
+        """
+        try:
+            result, new_world = self._skills.invoke(
+                step.skill, self._backend, world, step.params
+            )
+            skill = self._skills.get(step.skill)
+            passed = self._monitor.check(result, skill, new_world, step.params)
+            return result, new_world, passed
+        except Exception as exc:  # noqa: BLE001 - 刻意兜底，保证运行时不被异常终止
+            failure = SkillResult.failure(
+                f"执行异常（{type(exc).__name__}）：{exc}",
+                exception=type(exc).__name__,
+            )
+            return failure, world, False
+
     def _remember(self, kind: str, **fields: object) -> None:
         if self._memory is not None:
             self._memory.record(kind, **fields)
+
+    def _emit(self, event: RuntimeEvent) -> None:
+        """向所有观察者广播事件；单个观察者异常不影响运行时与其它观察者。"""
+        for observer in self._observers:
+            try:
+                observer.on_event(event)
+            except Exception:  # noqa: BLE001 - 显示端故障不得拖垮机器人运行
+                pass

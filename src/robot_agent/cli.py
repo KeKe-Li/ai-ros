@@ -2,6 +2,8 @@
 
 用法：
     python -m robot_agent.cli demo [--planner mock|llm] [--inject-failure] [--verbose]
+    python -m robot_agent.cli demo --web [--port 8000] [--open]   # Web 图形界面上位机
+    python -m robot_agent.cli demo --watch                        # 终端实时可视化
 
 打印完整闭环执行轨迹：目标、分解与每步状态、异常恢复过程、终态验证结果。
 """
@@ -10,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 
 from robot_agent.demo.pick_and_place import DEFAULT_GOAL, run_demo
 from robot_agent.memory.memory import Memory
@@ -59,12 +62,48 @@ def _print_report(report: RunReport, goal: str, verbose: bool) -> None:
 def _cmd_demo(args: argparse.Namespace) -> int:
     planner = _make_planner(args.planner)
     memory = Memory() if args.verbose else None
+    observers: list[object] = []
+
+    if args.watch:
+        from robot_agent.display.terminal import TerminalMonitor
+
+        observers.append(TerminalMonitor(step_delay=args.frame_delay))
+
+    server = None
+    if args.web:
+        from robot_agent.display.web import DashboardServer, EventBroadcaster, WebMonitor
+
+        broadcaster = EventBroadcaster()
+        server = DashboardServer(broadcaster, port=args.port)
+        server.start()
+        print(f"上位机仪表盘已启动：{server.url}")
+        observers.append(WebMonitor(broadcaster, min_interval=args.frame_delay))
+        if args.open:
+            import webbrowser
+
+            try:
+                webbrowser.open(server.url)
+            except Exception:  # noqa: BLE001 - 打开浏览器失败不影响服务
+                pass
+
     report = run_demo(
-        inject_failure=args.inject_failure, planner=planner, memory=memory
+        inject_failure=args.inject_failure,
+        planner=planner,
+        memory=memory,
+        observers=observers or None,
     )
     _print_report(report, DEFAULT_GOAL, args.verbose)
     if memory is not None:
         print(f"\n[verbose] 短期记忆事件数：{len(memory.episode())}")
+
+    if server is not None:
+        print(f"\n仪表盘持续服务中：{server.url}  （按 Ctrl+C 退出）")
+        try:
+            threading.Event().wait()  # 阻塞，保持服务以便浏览器查看/回放
+        except KeyboardInterrupt:
+            print("\n正在关闭仪表盘…")
+        finally:
+            server.stop()
     return 0 if report.succeeded else 1
 
 
@@ -81,6 +120,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--inject-failure", action="store_true", help="注入一次抓取故障以演示恢复"
     )
     demo.add_argument("--verbose", action="store_true", help="打印世界快照与记忆")
+    demo.add_argument(
+        "--watch", action="store_true", help="启用终端实时可视化上位机监控"
+    )
+    demo.add_argument(
+        "--web", action="store_true", help="启用 Web 图形界面上位机（浏览器查看）"
+    )
+    demo.add_argument("--port", type=int, default=8000, help="Web 仪表盘端口")
+    demo.add_argument(
+        "--open", action="store_true", help="自动在默认浏览器打开仪表盘"
+    )
+    demo.add_argument(
+        "--frame-delay",
+        type=float,
+        default=0.6,
+        help="上位机每帧停留秒数（配合 --watch / --web）",
+    )
     demo.set_defaults(func=_cmd_demo)
     return parser
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from robot_agent.backends.sim_backend import SimBackend
 from robot_agent.core.task import TaskStatus
+from robot_agent.planning.goal import parse_goal
 from robot_agent.planning.mock_planner import MockPlanner
 from robot_agent.runtime.agent_runtime import AgentRuntime
 from robot_agent.runtime.monitor import ExecutionMonitor
@@ -21,15 +22,20 @@ def _runtime(fail_actions=None, **kw):
     return runtime, world
 
 
-def test_verify_goal_uses_planner_idempotency():
+def test_verify_goal_is_deterministic_and_planner_free():
     # Arrange
     _, world = build_pick_and_place_world()
+    goal_spec = parse_goal(GOAL, world)
     from dataclasses import replace
 
+    # 未达成时为 False
+    assert ExecutionMonitor().verify_goal(goal_spec, world) is False
+
+    # 方块入箱后为 True（纯确定性判定，不触发任何规划）
     world = world.with_object("red_cube", replace(world.get("red_cube"), in_container="box"))
 
     # Act / Assert
-    assert ExecutionMonitor().verify_goal(MockPlanner(), GOAL, world) is True
+    assert ExecutionMonitor().verify_goal(goal_spec, world) is True
 
 
 def test_transient_grasp_failure_recovers_via_retry():

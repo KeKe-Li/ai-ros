@@ -1,94 +1,113 @@
-## robot-agent — 机器人 Agent Runtime 原型（类 dimOS）
+**English** | [简体中文](README.zh-CN.md)
 
-一个机器人**上层智能系统**原型：让机器人理解任务 → 拆解任务 → 调用技能 → 监控状态 → 异常恢复 → 完成闭环执行。
+## robot-agent — Robotics Agent Runtime Prototype (dimOS-style)
 
-核心不依赖 ROS2/GPU/网络/API key，默认使用纯 Python 仿真后端与规则分解器，**处处可运行、可复现、可自动化验证**。
+An **upper-layer robot intelligence** prototype: the robot understands a task → decomposes it → calls skills → monitors state → recovers from failures → closes the execution loop.
 
-### 架构总览
+The core has **zero dependency** on ROS2/GPU/network/API key. By default it uses a pure-Python simulation backend and a rule-based planner, so it **runs, reproduces, and self-verifies anywhere**.
+
+### Architecture
 
 ```
-自然语言目标
-     │  理解 + 分解
-     ▼
- ┌──────────┐   调度   ┌──────────────┐  统一调用    ┌──────────────┐
- │ Planner  │ ──────▶ │ TaskManager  │ ─────────▶  │ SkillManager │
- │(mock/LLM)│         │ (拓扑排序)    │             │  (技能注册)    │
- └──────────┘         └──────────────┘             └──────────────┘
-     ▲                      ▲  监控/恢复                   │ 物理动作
-     │ 重规划                │                             ▼
- ┌────────────────── AgentRuntime 主循环 ──────┐   ┌──────────────┐
- │ 理解→分解→调度→执行→监控→异常恢复→目标验证       │   │ RobotBackend │
- └───────────────────┬────────────────────────┘   │ Sim / ROS2*  │
-             记忆 Memory / 工具 ToolRegistry       └──────┬───────┘
-                                                         ▼
-                                                     GridWorld 世界状态
+Natural-language goal
+      │  understand + decompose
+      ▼
+ ┌──────────┐  schedule ┌──────────────┐ unified call ┌──────────────┐
+ │ Planner  │ ────────▶ │ TaskManager  │ ───────────▶ │ SkillManager │
+ │(mock/LLM)│           │ (topo sort)  │              │  (registry)  │
+ └──────────┘           └──────────────┘              └──────┬───────┘
+     ▲                       ▲  monitor/recover              │ actuation
+     │ replan                │                               ▼
+ ┌───────────── AgentRuntime main loop ─────────┐    ┌──────────────┐
+ │ understand→schedule→execute→monitor→recover→  │    │ RobotBackend │
+ │ verify                                        │    │ Sim / ROS2*  │
+ └──────┬────────────────────────┬───────────────┘    └──────┬───────┘
+  Memory / ToolRegistry     event bus (RuntimeObserver)       ▼
+                                 │                     GridWorld state
+                        ┌────────┴────────┐
+                        ▼                 ▼
+                 Terminal live view   Web dashboard (SSE)
 ```
-`*` ROS2Backend 为预留适配器，部署到 Linux + ROS2 时补全实现。
+`*` `ROS2Backend` is a reserved adapter — implement it when deploying on Linux + ROS2.
 
-### 核心模块
+### Core modules
 
-| 模块 | 职责 |
+| Module | Responsibility |
 |---|---|
-| `core/` | 公共类型（SkillResult/Pose）、任务状态机（Task）、领域异常 |
-| `world/` | 不可变世界状态 WorldState + 纯 Python 网格世界 GridWorld |
-| `backends/` | 机器人执行层抽象 RobotBackend；SimBackend（默认）、ROS2Backend（预留） |
-| `skills/` | 标准化技能接口 Skill + SkillManager；导航/检测/抓取/放置 |
-| `planning/` | Planner 接口；MockPlanner（规则，默认）、LLMPlanner（Claude，可选） |
-| `runtime/` | TaskManager（调度）、ExecutionMonitor（监控/校验）、AgentRuntime（主循环） |
-| `memory/` | 短期 episode 事件流 + 长期 JSON KV 记忆 |
-| `tools/` | ToolCalling：注册纯信息/计算工具（与产生物理动作的 Skill 边界清晰） |
-| `demo/`、`cli.py` | pick-and-place 端到端演示与命令行入口 |
+| `core/` | Common types (SkillResult/Pose), task state machine (Task), domain errors |
+| `world/` | Immutable WorldState + pure-Python GridWorld |
+| `backends/` | RobotBackend abstraction; SimBackend (default), ROS2Backend (reserved) |
+| `skills/` | Standardized Skill interface + SkillManager; navigate/detect/grasp/place |
+| `planning/` | Planner interface; MockPlanner (rules, default), LLMPlanner (Claude, optional); GoalSpec deterministic goal check |
+| `runtime/` | TaskManager (scheduling), ExecutionMonitor (monitor/verify), AgentRuntime (main loop), event bus |
+| `memory/` | Short-term episode stream + long-term JSON KV memory |
+| `tools/` | Tool calling: pure info/compute tools (clear boundary vs. actuation Skills) |
+| `display/` | Real-time HMI: terminal live view + web dashboard (subscribe to the runtime event bus) |
+| `demo/`, `cli.py` | pick-and-place end-to-end demo and command-line entry |
 
-### 快速开始
+### Quick start
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# 端到端闭环演示（观察：理解→分解→调度→执行→监控→验证）
+# End-to-end closed-loop demo (understand→decompose→schedule→execute→monitor→verify)
 python -m robot_agent.cli demo --verbose
 
-# 注入一次抓取故障，观察异常恢复（重试）
+# Terminal live HMI (real-time grid + status panel)
+python -m robot_agent.cli demo --watch --frame-delay 0.6
+
+# Web GUI HMI (view in browser; zero external deps)
+python -m robot_agent.cli demo --web --open --frame-delay 0.6
+# then open http://127.0.0.1:8000/
+
+# Inject one grasp failure to observe recovery (retry)
 python -m robot_agent.cli demo --inject-failure
 
-# 完整验证（高风险改动、发布前或需要全量确认时）
+# Full verification (high-risk changes / before release)
 pytest --cov=robot_agent
 ```
 
-### 开发与验证建议
+### Real-time monitoring / HMI
 
-默认按改动风险选择验证，不要求每次改动都运行完整 demo 与覆盖率。
+During execution the runtime emits structured events through a decoupled **event bus** (`RuntimeObserver`/`RuntimeEvent`). Any display is merely a subscriber — **the runtime never changes**:
 
-- **纯文档、规则、注释改动**：一般不强制运行 `pytest`；若修改命令示例或使用说明，至少核对相关命令、路径和文件名仍然有效。
-- **单模块、小范围代码改动**：优先运行相关测试文件或最小受影响测试集。
-- **跨模块改动，或涉及 `planning/`、`runtime/`、`skills/`、`cli.py` 等核心链路**：运行 `pytest -q`。
-- **影响依赖、打包、入口命令或端到端链路的改动**：运行 `pytest --cov=robot_agent --cov-report=term-missing -q`；必要时再运行 demo 命令。
+- **Terminal live view** (`TerminalMonitor`): ANSI redraw of the grid world + status panel, zero deps.
+- **Web dashboard** (`WebMonitor` + stdlib `http.server` + SSE): browser view of grid/task/recovery, with history replay, zero external deps.
+- A misbehaving observer is isolated — **a display crash never brings down the robot run**.
 
-若本地环境缺少 ROS2 或 LLM 依赖，不要求为本轮未触达的可选扩展路径补做环境外验证；相关限制应在说明中写明。
+### Development & verification guidance
 
-### 任务完成标准
+By default, choose verification by change risk; not every change needs the full demo + coverage run.
 
-默认以当前任务目标为准，不把所有任务都按“完整功能开发”处理。
+- **Docs / rules / comments only**: `pytest` is generally not required; if you touch command examples or usage, at least confirm the relevant commands, paths, and file names are still valid.
+- **Single-module, small code change**: run the relevant test file or the minimal affected subset.
+- **Cross-module change, or touching core paths (`planning/`, `runtime/`, `skills/`, `cli.py`)**: run `pytest -q`.
+- **Change affecting dependencies, packaging, entry commands, or the end-to-end path**: run `pytest --cov=robot_agent --cov-report=term-missing -q`; run the demo if needed.
 
-- **审查 / 分析类任务**：明确问题位置、说明影响、给出可执行调整建议，并等待确认后再修改，即可视为完成。
-- **文档 / 规则类任务**：文本更新完成，且与当前仓库实际一致；如涉及命令、路径或目录结构，完成必要的 smoke check。
-- **代码改动类任务**：实现完整，并完成与风险匹配的验证；若行为、接口或使用方式变化，更新相应测试与文档。
-- **默认不要求**：每次任务都提交 `commit`、通读全部文档，或重复确认已明确的范围；Memory 仅在用户明确要求时更新。
-- **需要额外确认的情况**：删除、重置、推送、敏感配置修改、权限变更等高风险操作。
+If ROS2 or LLM dependencies are missing locally, out-of-environment verification is not required for optional extension paths not touched this round; note the limitation instead.
 
-### 演示场景
+### Task completion criteria
 
-10×10 网格：机器人起点 `(0,0)`，桌子 `table@(5,5)` 上有 `red_cube`，箱子 `box@(8,2)`。
-目标"把红色方块放到箱子里"被分解为 `navigate → detect → grasp → navigate → place`， 最终闭环验证方块进入箱子。
+By default, judge against the current task's goal; do not treat every task as full feature development.
 
-### 扩展点
+- **Review / analysis tasks**: locate the issue, explain the impact, give actionable suggestions, and wait for confirmation before editing — that counts as done.
+- **Docs / rules tasks**: text updated and consistent with the current repo; if commands, paths, or directory structure are involved, do the necessary smoke check.
+- **Code-change tasks**: complete implementation plus risk-matched verification; if behavior, interface, or usage changes, update the corresponding tests and docs.
+- **Not required by default**: committing on every task, reading all docs, or re-confirming already-agreed scope; update Memory only when explicitly requested.
+- **Requires extra confirmation**: delete, reset, push, sensitive-config edits, permission changes, and other high-risk operations.
 
-- **接入 ROS2**：在 `backends/ros2_backend.py` 中按注释映射到 Nav2 action、感知 service、
-  MoveIt/机械臂 action 与 TF，实现 `RobotBackend` 四个方法，上层无需改动。
-- **接入真实 LLM**：`pip install -e ".[llm]"` 并设置 `ANTHROPIC_API_KEY`，
-  `python -m robot_agent.cli demo --planner llm`；离线/失败时自动回退到 MockPlanner。
-- **新增技能**：继承 `skills/base.py::Skill` 并在 `default_skill_manager` 注册即可被统一调度。
+### Demo scenario
 
-### 设计原则
+10×10 grid: robot starts at `(0,0)`, `table@(5,5)` holds `red_cube`, `box@(8,2)` is the container. The goal "把红色方块放到箱子里" (put the red cube into the box) decomposes into `navigate → detect → grasp → navigate → place`; the closed loop verifies the cube ends up inside the box.
 
-不可变数据模型（frozen dataclass，更新返回新副本）、依赖倒置与接口隔离、多个小文件优于少数大文件、先跑通闭环再谈扩展（YAGNI）。
+### Extension points
+
+- **Integrate ROS2**: in `backends/ros2_backend.py`, follow the mapping notes (Nav2 action, perception service, MoveIt/arm action + TF) and implement `RobotBackend`'s four methods — the upper layer stays unchanged.
+- **Integrate a real LLM**: `pip install -e ".[llm]"`, set `ANTHROPIC_API_KEY`, then `python -m robot_agent.cli demo --planner llm`; it falls back to MockPlanner offline or on failure.
+- **Add a skill**: subclass `skills/base.py::Skill` and register it in `default_skill_manager` to be dispatched uniformly.
+- **Add a display**: implement `RuntimeObserver.on_event` and subscribe to the event bus — the runtime stays unchanged.
+
+### Design principles
+
+Immutable data models (frozen dataclass, updates return new copies), dependency inversion & interface segregation, many small files over few large ones, close the loop first then extend (YAGNI).

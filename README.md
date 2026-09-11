@@ -18,7 +18,7 @@ Natural-language goal
  └──────────┘           └──────────────┘              └──────┬───────┘
      ▲                       ▲  monitor/recover              │ actuation
      │ replan                │                               ▼
- ┌───────────── AgentRuntime main loop ─────────┐    ┌──────────────┐
+ ┌───────────── AgentRuntime main loop ──────────┐    ┌──────────────┐
  │ understand→schedule→execute→monitor→recover→  │    │ RobotBackend │
  │ verify                                        │    │ Sim / ROS2*  │
  └──────┬────────────────────────┬───────────────┘    └──────┬───────┘

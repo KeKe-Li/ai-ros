@@ -7,7 +7,8 @@
     - name / required_params：元信息，供发现与参数校验。
     - preconditions(world, params)：执行前的世界前置条件，默认恒真。
     - execute(backend, world, params) -> (SkillResult, 新 WorldState)：实际执行。
-    - postconditions(world, params)：执行后应满足的世界后置条件，供监控校验，默认恒真。
+    - postconditions(before, after, params, result)：结合执行前后世界与结果校验后置条件，
+      供监控做闭环判断，默认恒真。
 """
 
 from __future__ import annotations
@@ -39,6 +40,12 @@ class Skill(ABC):
     ) -> tuple[SkillResult, WorldState]:
         """执行技能，返回结果与更新后的世界。"""
 
-    def postconditions(self, world: WorldState, params: Mapping[str, object]) -> bool:
+    def postconditions(
+        self,
+        before: WorldState,
+        after: WorldState,
+        params: Mapping[str, object],
+        result: SkillResult,
+    ) -> bool:
         """执行后置条件，默认恒真，供监控做闭环校验。"""
         return True

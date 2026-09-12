@@ -107,7 +107,7 @@ pytest --cov=robot_agent
   MoveIt/机械臂 action 与 TF，实现 `RobotBackend` 四个方法，上层无需改动。
 - **接入真实 LLM**：`pip install -e ".[llm]"` 并设置 `ANTHROPIC_API_KEY`，
   `python -m robot_agent.cli demo --planner llm`；离线/失败时自动回退到 MockPlanner。
-- **新增技能**：继承 `skills/base.py::Skill` 并在 `default_skill_manager` 注册即可被统一调度。
+- **新增技能**：继承 `skills/base.py::Skill`，实现执行逻辑以及基于执行前后世界的后置条件，并在 `default_skill_manager` 注册即可被统一调度。
 - **新增显示端**：实现 `RuntimeObserver.on_event` 并订阅事件总线即可，运行时无需改动。
 
 ### 设计原则

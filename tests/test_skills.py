@@ -6,9 +6,11 @@ import pytest
 
 from robot_agent.backends.sim_backend import SimBackend
 from robot_agent.core.errors import UnknownSkillError
-from robot_agent.core.types import Pose
+from robot_agent.core.types import Pose, SkillResult
 from robot_agent.skills import default_skill_manager
+from robot_agent.skills.manipulation import PlaceSkill
 from robot_agent.world.grid_world import GridWorld, build_pick_and_place_world
+from robot_agent.world.state import ObjectInfo, build_world
 
 
 def _sim_and_world(fail_actions=None):
@@ -119,6 +121,44 @@ def test_place_without_holding_fails():
 
     # Assert
     assert not result.ok
+
+
+def test_place_postcondition_requires_held_object_to_enter_target_container():
+    before = build_world(
+        Pose(0, 0),
+        {
+            "old_cube": ObjectInfo(
+                Pose(1, 1), is_graspable=True, in_container="box"
+            ),
+            "target_cube": ObjectInfo(Pose(0, 0), is_graspable=True),
+            "box": ObjectInfo(Pose(1, 1), is_container=True),
+        },
+    ).with_holding("target_cube")
+    # 模拟错误后端：释放机械臂，但没有把本次持有物放入容器。
+    after = before.with_holding(None)
+
+    passed = PlaceSkill().postconditions(
+        before,
+        after,
+        {"container_id": "box"},
+        SkillResult.success("后端误报成功"),
+    )
+
+    assert passed is False
+
+
+def test_place_postcondition_accepts_correctly_placed_held_object():
+    backend, world = _sim_and_world()
+    _, at_table = backend.navigate_to(world, Pose(5, 5))
+    _, before = backend.grasp(at_table, "red_cube")
+    _, before = backend.navigate_to(before, Pose(8, 2))
+    result, after = backend.place(before, "box")
+
+    passed = PlaceSkill().postconditions(
+        before, after, {"container_id": "box"}, result
+    )
+
+    assert passed is True
 
 
 def test_failure_injection_makes_grasp_fail_once():

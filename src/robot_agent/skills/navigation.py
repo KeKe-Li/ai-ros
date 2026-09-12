@@ -29,7 +29,13 @@ class NavigateSkill(Skill):
         target = world.objects[target_id].pose
         return backend.navigate_to(world, target)
 
-    def postconditions(self, world: WorldState, params: Mapping[str, object]) -> bool:
+    def postconditions(
+        self,
+        before: WorldState,
+        after: WorldState,
+        params: Mapping[str, object],
+        result: SkillResult,
+    ) -> bool:
         target_id = str(params["target_object"])
-        target = world.objects[target_id].pose
-        return world.robot_pose == target
+        target = after.objects[target_id].pose
+        return after.robot_pose == target

@@ -105,7 +105,7 @@ By default, judge against the current task's goal; do not treat every task as fu
 
 - **Integrate ROS2**: in `backends/ros2_backend.py`, follow the mapping notes (Nav2 action, perception service, MoveIt/arm action + TF) and implement `RobotBackend`'s four methods — the upper layer stays unchanged.
 - **Integrate a real LLM**: `pip install -e ".[llm]"`, set `ANTHROPIC_API_KEY`, then `python -m robot_agent.cli demo --planner llm`; it falls back to MockPlanner offline or on failure.
-- **Add a skill**: subclass `skills/base.py::Skill` and register it in `default_skill_manager` to be dispatched uniformly.
+- **Add a skill**: subclass `skills/base.py::Skill`, implement execution and pre/post-world postcondition checks, then register it in `default_skill_manager` for uniform dispatch.
 - **Add a display**: implement `RuntimeObserver.on_event` and subscribe to the event bus — the runtime stays unchanged.
 
 ### Design principles

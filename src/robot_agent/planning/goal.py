@@ -65,7 +65,7 @@ def parse_goal(text: str, world: WorldState) -> GoalSpec:
     lowered = text.lower()
     color = _parse_color(lowered)
     container_id = _find_container(lowered, world)
-    object_id = _find_target_object(color, container_id, world)
+    object_id = _find_target_object(lowered, color, container_id, world)
     return InContainerGoal(
         text=text, object_id=object_id, container_id=container_id, color=color
     )
@@ -82,20 +82,44 @@ def _parse_color(text: str) -> str | None:
 
 
 def _find_container(text: str, world: WorldState) -> str:
-    if not any(kw in text for kw in _CONTAINER_KEYWORDS):
-        raise PlanningError(f"目标未描述有效的容器/放置意图：{text!r}")
     containers = [
         oid for oid, info in sorted(world.objects.items()) if info.is_container
     ]
     if not containers:
         raise PlanningError("世界中不存在可放置的容器")
+    explicit = _find_explicit_id(text, containers)
+    if explicit is not None:
+        return explicit
+    if not any(kw in text for kw in _CONTAINER_KEYWORDS):
+        raise PlanningError(f"目标未描述有效的容器/放置意图：{text!r}")
+    if len(containers) > 1:
+        raise PlanningError(f"目标对应多个候选容器，请明确指定：{containers}")
     return containers[0]
 
 
-def _find_target_object(color: str | None, container_id: str, world: WorldState) -> str:
+def _find_target_object(
+    text: str, color: str | None, container_id: str, world: WorldState
+) -> str:
     candidates = world.find_objects(color=color, graspable=True)
     # 排除容器自身（理论上容器不可抓取，这里稳妥起见再过滤一次）
     candidates = [c for c in candidates if c != container_id]
     if not candidates:
         raise PlanningError(f"世界中找不到匹配的可抓取物体（color={color}）")
+    explicit = _find_explicit_id(text, candidates)
+    if explicit is not None:
+        return explicit
+    if len(candidates) > 1:
+        raise PlanningError(f"目标对应多个候选物体，请明确指定：{candidates}")
     return candidates[0]
+
+
+def _find_explicit_id(text: str, candidates: list[str] | tuple[str, ...]) -> str | None:
+    """查找目标文本中最具体的实体 ID；同长度多匹配视为歧义。"""
+    matches = [entity_id for entity_id in candidates if entity_id.lower() in text]
+    if not matches:
+        return None
+    longest = max(len(entity_id) for entity_id in matches)
+    most_specific = [entity_id for entity_id in matches if len(entity_id) == longest]
+    if len(most_specific) > 1:
+        raise PlanningError(f"目标同时指定了多个实体：{sorted(most_specific)}")
+    return most_specific[0]

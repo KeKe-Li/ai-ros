@@ -27,3 +27,16 @@ class DetectObjectSkill(Skill):
     ) -> tuple[SkillResult, WorldState]:
         result = backend.detect(world, params)
         return result, world  # 感知不改变世界
+
+    def postconditions(
+        self,
+        before: WorldState,
+        after: WorldState,
+        params: Mapping[str, object],
+        result: SkillResult,
+    ) -> bool:
+        object_ids = result.data.get("object_ids")
+        if not isinstance(object_ids, list) or not object_ids:
+            return False
+        expected = params.get("object_id")
+        return expected is None or str(expected) in object_ids

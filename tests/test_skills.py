@@ -59,6 +59,16 @@ def test_detect_finds_red_cube_only_when_adjacent():
     assert near.data["object_ids"] == ["red_cube"]
 
 
+def test_detect_respects_explicit_object_id_filter():
+    backend, world = _sim_and_world()
+    _, at_table = backend.navigate_to(world, Pose(5, 5))
+
+    result = backend.detect(at_table, {"object_id": "missing", "graspable": True})
+
+    assert not result.ok
+    assert result.data["object_ids"] == []
+
+
 def test_grasp_requires_adjacency():
     # Arrange
     backend, world = _sim_and_world()

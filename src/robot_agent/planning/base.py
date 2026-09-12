@@ -8,9 +8,18 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeAlias
 
 from robot_agent.world.state import WorldState
+
+
+@dataclass(frozen=True)
+class OutputRef:
+    """对先前步骤结构化输出的引用。"""
+
+    step_id: str
+    path: tuple[str | int, ...]
+    expected: object | None = None
 
 
 @dataclass(frozen=True)
@@ -20,6 +29,20 @@ class SkillCall:
     skill: str
     params: dict[str, Any] = field(default_factory=dict)
     depends_on: tuple[int, ...] = ()
+    step_id: str = ""
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """一次只读工具调用；工具不会改变世界状态。"""
+
+    tool: str
+    params: dict[str, Any] = field(default_factory=dict)
+    depends_on: tuple[int, ...] = ()
+    step_id: str = ""
+
+
+PlanStep: TypeAlias = SkillCall | ToolCall
 
 
 @dataclass(frozen=True)
@@ -27,7 +50,7 @@ class Plan:
     """由若干技能调用构成的计划。"""
 
     goal: str
-    steps: tuple[SkillCall, ...] = ()
+    steps: tuple[PlanStep, ...] = ()
 
     @property
     def is_empty(self) -> bool:

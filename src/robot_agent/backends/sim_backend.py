@@ -33,10 +33,13 @@ class SimBackend(RobotBackend):
     def detect(self, world: WorldState, query: Mapping[str, object]) -> SkillResult:
         color = query.get("color")  # type: ignore[assignment]
         graspable = query.get("graspable")  # type: ignore[assignment]
+        object_id = query.get("object_id")
         candidates = world.find_objects(
             color=color,  # type: ignore[arg-type]
             graspable=graspable,  # type: ignore[arg-type]
         )
+        if object_id is not None:
+            candidates = [oid for oid in candidates if oid == str(object_id)]
         # 仅"看得见"机器人所在位置附近（相邻）的物体
         visible = [
             oid

@@ -42,6 +42,7 @@ def test_event_to_dict_serializes_world_and_step():
     ids = {o["id"] for o in world["objects"]}
     assert {"red_cube", "box", "table"} <= ids
     assert payload["step"]["skill"] == "grasp"
+    assert payload["step"]["step_id"] == ""
     # 整体可 JSON 序列化
     assert json.loads(json.dumps(payload))["goal"] == GOAL
 

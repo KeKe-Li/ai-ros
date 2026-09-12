@@ -55,6 +55,7 @@ def event_to_dict(event: RuntimeEvent) -> dict[str, Any]:
     if event.step is not None:
         payload["step"] = {
             "skill": event.step.skill,
+            "step_id": event.step.step_id,
             "status": event.step.status,
             "message": event.step.message,
             "attempt": event.step.attempt,

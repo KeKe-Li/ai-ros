@@ -28,3 +28,7 @@ class SchedulingError(RobotAgentError):
 
 class BackendNotAvailableError(RobotAgentError):
     """请求的机器人执行后端在当前环境不可用（如 ROS2 未安装）。"""
+
+
+class OutputResolutionError(RobotAgentError):
+    """计划步骤引用的上游输出不存在、路径无效或值不符合预期。"""

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from robot_agent.core.errors import PlanningError
+from robot_agent.planning.base import OutputRef
 from robot_agent.planning.mock_planner import MockPlanner
 from robot_agent.world.grid_world import build_pick_and_place_world
 
@@ -27,6 +28,17 @@ def test_plan_decomposes_full_pick_and_place_sequence():
     ]
     assert plan.steps[0].params["target_object"] == "red_cube"
     assert plan.steps[-1].params["container_id"] == "box"
+    assert [step.step_id for step in plan.steps] == [
+        "navigate_object",
+        "detect_object",
+        "grasp_object",
+        "navigate_container",
+        "place_object",
+    ]
+    assert plan.steps[1].params["object_id"] == "red_cube"
+    assert plan.steps[2].params["object_id"] == OutputRef(
+        "detect_object", path=("object_ids", 0), expected="red_cube"
+    )
 
 
 def test_plan_steps_have_linear_dependencies():

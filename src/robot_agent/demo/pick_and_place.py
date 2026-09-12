@@ -14,6 +14,7 @@ from robot_agent.planning.mock_planner import MockPlanner
 from robot_agent.runtime.agent_runtime import AgentRuntime, MemorySink, RunReport
 from robot_agent.runtime.events import RuntimeObserver
 from robot_agent.skills import default_skill_manager
+from robot_agent.tools import default_tool_registry
 from robot_agent.world.grid_world import build_pick_and_place_world
 from robot_agent.world.state import WorldState
 
@@ -38,6 +39,7 @@ def build_runtime(
         backend=SimBackend(grid),
         skill_manager=default_skill_manager(),
         planner=planner or MockPlanner(),
+        tools=default_tool_registry(),
         memory=memory,
         observers=observers,
     )

@@ -37,10 +37,10 @@
 | `world/` | 不可变世界状态 WorldState + 纯 Python 网格世界 GridWorld |
 | `backends/` | 机器人执行层抽象 RobotBackend；SimBackend（默认）、ROS2Backend（预留） |
 | `skills/` | 标准化技能接口 Skill + SkillManager；导航/检测/抓取/放置 |
-| `planning/` | Planner 接口；MockPlanner（规则，默认）、LLMPlanner（Claude，可选）；GoalSpec 确定性目标判定 |
-| `runtime/` | TaskManager（调度）、ExecutionMonitor（监控/校验）、AgentRuntime（主循环）、事件总线 |
+| `planning/` | Planner 接口；MockPlanner（规则，默认）、LLMPlanner（Claude，可选）；GoalSpec 目标判定；PlanValidator 执行前验证 |
+| `runtime/` | TaskManager（调度）、ExecutionContext（步骤输出传递）、ExecutionMonitor（监控/校验）、AgentRuntime（主循环）、事件总线 |
 | `memory/` | 短期 episode 事件流 + 长期 JSON KV 记忆 |
-| `tools/` | ToolCalling：注册纯信息/计算工具（与产生物理动作的 Skill 边界清晰） |
+| `tools/` | Tool Calling：注册并执行纯信息/计算工具，结果可被后续步骤引用（与产生物理动作的 Skill 边界清晰） |
 | `display/` | 上位机实时监控：终端实时视图 + Web 仪表盘（订阅运行时事件总线） |
 | `demo/`、`cli.py` | pick-and-place 端到端演示与命令行入口 |
 
@@ -74,6 +74,13 @@ pytest --cov=robot_agent
 - **终端实时视图**（`TerminalMonitor`）：用 ANSI 转义实时重绘网格世界 + 状态面板，零依赖。
 - **Web 仪表盘**（`WebMonitor` + 标准库 `http.server` + SSE）：浏览器实时查看网格/任务/恢复，支持历史回放，零外部依赖。
 - 显示端异常被隔离，**GUI 崩溃不会拖垮机器人运行**。
+
+### 执行数据流与计划安全
+
+- 每个计划步骤具有稳定 `step_id`，成功输出记录在当次计划的 `ExecutionContext` 中。
+- 后续步骤通过结构化 `OutputRef` 引用技能或工具输出；引用缺失、路径错误或值不符合预期时不会执行物理动作。
+- `PlanValidator` 在调度前验证步骤、依赖、注册能力、必需参数和目标一致性。
+- 默认规则规划器使用 `detect` 的真实 `object_ids[0]` 驱动 `grasp`，并校验检测对象就是目标对象。
 
 ### 开发与验证建议
 

@@ -25,6 +25,7 @@ class StepRecord:
     status: str  # "ok" | "failed"
     message: str
     attempt: int
+    step_id: str = ""
 
 
 @dataclass(frozen=True)

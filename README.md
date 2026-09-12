@@ -38,10 +38,10 @@ Natural-language goal
 | `world/` | Immutable WorldState + pure-Python GridWorld |
 | `backends/` | RobotBackend abstraction; SimBackend (default), ROS2Backend (reserved) |
 | `skills/` | Standardized Skill interface + SkillManager; navigate/detect/grasp/place |
-| `planning/` | Planner interface; MockPlanner (rules, default), LLMPlanner (Claude, optional); GoalSpec deterministic goal check |
-| `runtime/` | TaskManager (scheduling), ExecutionMonitor (monitor/verify), AgentRuntime (main loop), event bus |
+| `planning/` | Planner interface; MockPlanner (rules, default), LLMPlanner (Claude, optional); GoalSpec checks; pre-execution PlanValidator |
+| `runtime/` | TaskManager, per-plan ExecutionContext, ExecutionMonitor, AgentRuntime main loop, event bus |
 | `memory/` | Short-term episode stream + long-term JSON KV memory |
-| `tools/` | Tool calling: pure info/compute tools (clear boundary vs. actuation Skills) |
+| `tools/` | Registered read-only info/compute tools whose results can feed later steps (separate from actuation Skills) |
 | `display/` | Real-time HMI: terminal live view + web dashboard (subscribe to the runtime event bus) |
 | `demo/`, `cli.py` | pick-and-place end-to-end demo and command-line entry |
 
@@ -75,6 +75,13 @@ During execution the runtime emits structured events through a decoupled **event
 - **Terminal live view** (`TerminalMonitor`): ANSI redraw of the grid world + status panel, zero deps.
 - **Web dashboard** (`WebMonitor` + stdlib `http.server` + SSE): browser view of grid/task/recovery, with history replay, zero external deps.
 - A misbehaving observer is isolated — **a display crash never brings down the robot run**.
+
+### Execution data flow and plan safety
+
+- Every plan step has a stable `step_id`; successful outputs are stored in a per-plan `ExecutionContext`.
+- Later steps use structured `OutputRef` values to consume skill or tool outputs. Missing paths or unexpected values stop execution before the physical action.
+- `PlanValidator` checks step structure, dependencies, registered capabilities, required parameters, and goal alignment before scheduling.
+- The default planner binds `detect.object_ids[0]` to `grasp.object_id` and verifies that the detected object is the requested target.
 
 ### Development & verification guidance
 

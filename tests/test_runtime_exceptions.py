@@ -7,13 +7,29 @@ from robot_agent.backends.sim_backend import SimBackend
 from robot_agent.core.task import TaskStatus
 from robot_agent.core.types import Pose, SkillResult
 from robot_agent.memory.memory import Memory
+from robot_agent.planning.base import Plan, Planner
 from robot_agent.planning.mock_planner import MockPlanner
 from robot_agent.runtime.agent_runtime import AgentRuntime
+from robot_agent.runtime.monitor import ExecutionMonitor
+from robot_agent.runtime.task_manager import TaskManager
 from robot_agent.skills import default_skill_manager
 from robot_agent.world.grid_world import GridWorld, build_pick_and_place_world
 from robot_agent.world.state import WorldState
 
 GOAL = "把红色方块放到箱子里"
+
+
+class _Recorder:
+    def __init__(self) -> None:
+        self.events = []
+
+    def on_event(self, event) -> None:
+        self.events.append(event)
+
+
+class _RaisingPlanner(Planner):
+    def plan(self, goal: str, world: WorldState) -> Plan:
+        raise RuntimeError("模拟规划器异常")
 
 
 class _RaisingGraspBackend(SimBackend):
@@ -99,7 +115,7 @@ def test_postcondition_exception_is_caught():
         def execute(self, backend, world, params):
             return SkillResult.success("ok"), world
 
-        def postconditions(self, world, params):
+        def postconditions(self, before, after, params, result):
             raise RuntimeError("后置条件校验异常")
 
     # 用会在后置条件抛异常的技能替换 navigate
@@ -114,3 +130,121 @@ def test_postcondition_exception_is_caught():
     # Assert
     assert not report.succeeded
     assert report.task.status is TaskStatus.FAILED
+
+
+def test_initial_planning_exception_returns_failed_report_and_finished_event():
+    grid, world = build_pick_and_place_world()
+    recorder = _Recorder()
+    runtime = AgentRuntime(
+        SimBackend(grid),
+        default_skill_manager(),
+        _RaisingPlanner(),
+        observers=[recorder],
+    )
+
+    report = runtime.run(GOAL, world)
+
+    assert report.task.status is TaskStatus.FAILED
+    assert "规划失败" in (report.task.error or "")
+    assert [event.kind for event in recorder.events] == [
+        "task_started",
+        "task_finished",
+    ]
+
+
+def test_goal_parse_exception_returns_failed_report_and_finished_event():
+    grid, world = build_pick_and_place_world()
+    recorder = _Recorder()
+    runtime = AgentRuntime(
+        SimBackend(grid),
+        default_skill_manager(),
+        MockPlanner(),
+        observers=[recorder],
+    )
+
+    report = runtime.run("捡起红色方块", world)
+
+    assert report.task.status is TaskStatus.FAILED
+    assert "目标解析失败" in (report.task.error or "")
+    assert [event.kind for event in recorder.events] == [
+        "task_started",
+        "task_finished",
+    ]
+
+
+def test_scheduling_exception_returns_failed_report_and_finished_event():
+    grid, world = build_pick_and_place_world()
+    recorder = _Recorder()
+
+    class _RaisingTaskManager(TaskManager):
+        def schedule(self, plan: Plan):
+            raise RuntimeError("模拟调度器异常")
+
+    runtime = AgentRuntime(
+        SimBackend(grid),
+        default_skill_manager(),
+        MockPlanner(),
+        task_manager=_RaisingTaskManager(),
+        observers=[recorder],
+    )
+
+    report = runtime.run(GOAL, world)
+
+    assert report.task.status is TaskStatus.FAILED
+    assert "调度失败" in (report.task.error or "")
+    assert recorder.events[-1].kind == "task_finished"
+
+
+def test_replanning_exception_preserves_trace_and_returns_failed_report():
+    grid, world = build_pick_and_place_world(fail_actions={"grasp": 99})
+    recorder = _Recorder()
+
+    class _RaiseOnReplan(Planner):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def plan(self, goal: str, world: WorldState) -> Plan:
+            self.calls += 1
+            if self.calls > 1:
+                raise RuntimeError("模拟重规划异常")
+            return MockPlanner().plan(goal, world)
+
+    runtime = AgentRuntime(
+        SimBackend(grid),
+        default_skill_manager(),
+        _RaiseOnReplan(),
+        max_retries=0,
+        observers=[recorder],
+    )
+
+    report = runtime.run(GOAL, world)
+
+    assert report.task.status is TaskStatus.FAILED
+    assert "重规划失败" in (report.task.error or "")
+    assert report.trace
+    assert report.replans == 1
+    assert recorder.events[-1].kind == "task_finished"
+
+
+def test_goal_verification_exception_returns_failed_report():
+    grid, world = build_pick_and_place_world()
+    recorder = _Recorder()
+
+    class _RaisingMonitor(ExecutionMonitor):
+        def verify_goal(self, goal, world):
+            raise RuntimeError("模拟目标验证异常")
+
+    runtime = AgentRuntime(
+        SimBackend(grid),
+        default_skill_manager(),
+        MockPlanner(),
+        monitor=_RaisingMonitor(),
+        observers=[recorder],
+    )
+
+    report = runtime.run(GOAL, world)
+
+    assert report.task.status is TaskStatus.FAILED
+    assert "目标验证失败" in (report.task.error or "")
+    assert len(report.trace) == 5
+    assert recorder.events[-1].kind == "task_finished"

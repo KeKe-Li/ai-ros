@@ -28,8 +28,14 @@ class GraspSkill(Skill):
     ) -> tuple[SkillResult, WorldState]:
         return backend.grasp(world, str(params["object_id"]))
 
-    def postconditions(self, world: WorldState, params: Mapping[str, object]) -> bool:
-        return world.holding == str(params["object_id"])
+    def postconditions(
+        self,
+        before: WorldState,
+        after: WorldState,
+        params: Mapping[str, object],
+        result: SkillResult,
+    ) -> bool:
+        return after.holding == str(params["object_id"])
 
 
 class PlaceSkill(Skill):
@@ -50,9 +56,20 @@ class PlaceSkill(Skill):
     ) -> tuple[SkillResult, WorldState]:
         return backend.place(world, str(params["container_id"]))
 
-    def postconditions(self, world: WorldState, params: Mapping[str, object]) -> bool:
-        # 放置后机械臂应已释放，且目标容器内至少有一个物体
+    def postconditions(
+        self,
+        before: WorldState,
+        after: WorldState,
+        params: Mapping[str, object],
+        result: SkillResult,
+    ) -> bool:
+        # 必须验证本次执行前持有的物体，而不是容器中任意已有物体。
+        held_id = before.holding
         container_id = str(params["container_id"])
-        return world.holding is None and bool(
-            world.find_objects(in_container=container_id)
+        placed = after.get(held_id) if held_id is not None else None
+        return (
+            held_id is not None
+            and after.holding is None
+            and placed is not None
+            and placed.in_container == container_id
         )

@@ -13,8 +13,9 @@ from robot_agent.planning.goal import InContainerGoal, parse_goal
 from robot_agent.planning.mock_planner import MockPlanner
 from robot_agent.runtime.agent_runtime import AgentRuntime
 from robot_agent.skills import default_skill_manager
+from robot_agent.core.types import Pose
 from robot_agent.world.grid_world import build_pick_and_place_world
-from robot_agent.world.state import WorldState
+from robot_agent.world.state import ObjectInfo, WorldState, build_world
 
 GOAL = "把红色方块放到箱子里"
 
@@ -61,6 +62,52 @@ def test_parse_goal_recognized_but_absent_color_raises():
     # Act / Assert
     with pytest.raises(PlanningError):
         parse_goal("把蓝色方块放到箱子里", world)
+
+
+def test_parse_goal_prefers_explicit_entity_ids():
+    world = build_world(
+        Pose(0, 0),
+        {
+            "blue_cube": ObjectInfo(Pose(1, 1), color="blue", is_graspable=True),
+            "red_cube": ObjectInfo(Pose(2, 2), color="red", is_graspable=True),
+            "a_box": ObjectInfo(Pose(3, 3), is_container=True),
+            "z_box": ObjectInfo(Pose(4, 4), is_container=True),
+        },
+    )
+
+    spec = parse_goal("把 red_cube 放到 z_box 里", world)
+
+    assert isinstance(spec, InContainerGoal)
+    assert spec.object_id == "red_cube"
+    assert spec.container_id == "z_box"
+
+
+def test_parse_goal_rejects_ambiguous_containers():
+    world = build_world(
+        Pose(0, 0),
+        {
+            "red_cube": ObjectInfo(Pose(1, 1), color="red", is_graspable=True),
+            "left_box": ObjectInfo(Pose(2, 2), is_container=True),
+            "right_box": ObjectInfo(Pose(3, 3), is_container=True),
+        },
+    )
+
+    with pytest.raises(PlanningError, match="多个.*容器"):
+        parse_goal("把红色方块放到箱子里", world)
+
+
+def test_parse_goal_rejects_ambiguous_objects():
+    world = build_world(
+        Pose(0, 0),
+        {
+            "red_cube_1": ObjectInfo(Pose(1, 1), color="red", is_graspable=True),
+            "red_cube_2": ObjectInfo(Pose(2, 2), color="red", is_graspable=True),
+            "box": ObjectInfo(Pose(3, 3), is_container=True),
+        },
+    )
+
+    with pytest.raises(PlanningError, match="多个.*物体"):
+        parse_goal("把红色方块放到箱子里", world)
 
 
 class _CountingPlanner(Planner):

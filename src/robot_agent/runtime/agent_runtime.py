@@ -7,9 +7,9 @@
     2) 重试仍失败则触发重规划——基于当前世界重新分解剩余目标（最多 max_replans 次）；
     3) 超出上限则任务判定为 FAILED。
 
-健壮性：技能/后端执行或后置条件校验抛出的任何异常都被捕获并转为失败结果，
-统一走上述恢复流程，绝不向上冒泡终止整个运行——这对接入真实后端（如 ROS2、
-存在通信/超时/资源冲突）尤为关键，也便于问题定位（异常单独记入 memory）。
+健壮性：目标解析、规划、调度、技能/后端执行、后置条件和目标验证异常都会被
+收敛为失败报告。单步异常走恢复流程，阶段异常直接形成可观测终态；这对接入
+真实后端（如 ROS2，存在通信/超时/资源冲突）尤为关键。
 """
 
 from __future__ import annotations
@@ -77,17 +77,34 @@ class AgentRuntime:
 
     def run(self, goal: str, world: WorldState) -> RunReport:
         """执行一个目标，返回运行报告。"""
-        # 目标解析一次得到确定性判据；验证与规划从此解耦
-        goal_spec = parse_goal(goal, world)
         task = Task(goal).to(TaskStatus.RUNNING)
         self._remember("task_started", goal=goal)
         self._emit(RuntimeEvent("task_started", world=world, goal=goal, task=task))
         trace: list[StepRecord] = []
         replans = 0
 
-        plan = self._planner.plan(goal, world)
+        # 目标解析一次得到确定性判据；验证与规划从此解耦。
+        try:
+            goal_spec = parse_goal(goal, world)
+        except Exception as exc:  # noqa: BLE001 - 运行时边界统一转换为失败报告
+            return self._failure_report(
+                task, world, trace, replans, goal, "目标解析失败", exc
+            )
+
+        try:
+            plan = self._planner.plan(goal, world)
+        except Exception as exc:  # noqa: BLE001 - 规划器属于可替换的外部边界
+            return self._failure_report(
+                task, world, trace, replans, goal, "规划失败", exc
+            )
+
         while True:
-            steps = self._task_manager.schedule(plan)
+            try:
+                steps = self._task_manager.schedule(plan)
+            except Exception as exc:  # noqa: BLE001 - 调度失败必须形成任务终态
+                return self._failure_report(
+                    task, world, trace, replans, goal, "调度失败", exc
+                )
             world, failed = self._execute(steps, world, trace, goal)
             if failed is None:
                 break  # 所有步骤达标
@@ -109,13 +126,24 @@ class AgentRuntime:
                     message=f"在 {failed.skill} 后重规划",
                 )
             )
-            plan = self._planner.plan(goal, world)
+            try:
+                plan = self._planner.plan(goal, world)
+            except Exception as exc:  # noqa: BLE001 - 重规划失败必须形成任务终态
+                return self._failure_report(
+                    task, world, trace, replans, goal, "重规划失败", exc
+                )
             task = task.to(TaskStatus.RUNNING)
             if plan.is_empty:
                 break  # 重规划发现目标已达成
 
         if not task.is_terminal:
-            if self._monitor.verify_goal(goal_spec, world):
+            try:
+                goal_satisfied = self._monitor.verify_goal(goal_spec, world)
+            except Exception as exc:  # noqa: BLE001 - 验证器属于可替换的运行时边界
+                return self._failure_report(
+                    task, world, trace, replans, goal, "目标验证失败", exc
+                )
+            if goal_satisfied:
                 task = task.to(TaskStatus.SUCCEEDED)
                 self._remember("task_succeeded", goal=goal)
             else:
@@ -129,6 +157,37 @@ class AgentRuntime:
         )
         return RunReport(
             task=task, world=world, trace=tuple(trace), replans=replans
+        )
+
+    def _failure_report(
+        self,
+        task: Task,
+        world: WorldState,
+        trace: list[StepRecord],
+        replans: int,
+        goal: str,
+        stage: str,
+        exc: Exception,
+    ) -> RunReport:
+        """把阶段异常收敛为可观测的失败终态。"""
+        error = f"{stage}（{type(exc).__name__}）：{exc}"
+        failed_task = task.to(TaskStatus.FAILED, error=error)
+        self._remember("task_failed", reason=error, stage=stage)
+        self._emit(
+            RuntimeEvent(
+                "task_finished",
+                world=world,
+                goal=goal,
+                task=failed_task,
+                replans=replans,
+                message=error,
+            )
+        )
+        return RunReport(
+            task=failed_task,
+            world=world,
+            trace=tuple(trace),
+            replans=replans,
         )
 
     # --- 内部执行 ---
@@ -206,7 +265,7 @@ class AgentRuntime:
                 step.skill, self._backend, world, step.params
             )
             skill = self._skills.get(step.skill)
-            passed = self._monitor.check(result, skill, new_world, step.params)
+            passed = self._monitor.check(result, skill, world, new_world, step.params)
             return result, new_world, passed
         except Exception as exc:  # noqa: BLE001 - 刻意兜底，保证运行时不被异常终止
             failure = SkillResult.failure(

@@ -8,12 +8,12 @@ import pytest
 
 from robot_agent.backends.sim_backend import SimBackend
 from robot_agent.core.errors import PlanningError
+from robot_agent.core.types import Pose
 from robot_agent.planning.base import Plan, Planner
 from robot_agent.planning.goal import InContainerGoal, parse_goal
 from robot_agent.planning.mock_planner import MockPlanner
 from robot_agent.runtime.agent_runtime import AgentRuntime
 from robot_agent.skills import default_skill_manager
-from robot_agent.core.types import Pose
 from robot_agent.world.grid_world import build_pick_and_place_world
 from robot_agent.world.state import ObjectInfo, WorldState, build_world
 
@@ -42,7 +42,9 @@ def test_is_satisfied_toggles_with_world():
     # Act / Assert：初始未达成
     assert spec.is_satisfied(world) is False
     # 入箱后达成
-    done = world.with_object("red_cube", replace(world.get("red_cube"), in_container="box"))
+    done = world.with_object(
+        "red_cube", replace(world.get("red_cube"), in_container="box")
+    )
     assert spec.is_satisfied(done) is True
 
 

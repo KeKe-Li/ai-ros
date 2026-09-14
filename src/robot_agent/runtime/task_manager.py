@@ -8,13 +8,13 @@
 from __future__ import annotations
 
 from robot_agent.core.errors import SchedulingError
-from robot_agent.planning.base import Plan, SkillCall
+from robot_agent.planning.base import Plan, PlanStep
 
 
 class TaskManager:
     """基于拓扑排序的计划调度器。"""
 
-    def schedule(self, plan: Plan) -> list[SkillCall]:
+    def schedule(self, plan: Plan) -> list[PlanStep]:
         """把计划展开为可顺序执行的步骤列表。
 
         使用 Kahn 算法做拓扑排序；发现非法依赖或循环依赖时抛 SchedulingError。

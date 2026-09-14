@@ -14,9 +14,15 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Mapping
+from collections.abc import Mapping
 
 from robot_agent.backends.base import RobotBackend
+from robot_agent.core.capabilities import (
+    CapabilityKind,
+    CapabilitySpec,
+    ParameterSpec,
+    SideEffect,
+)
 from robot_agent.core.types import SkillResult
 from robot_agent.world.state import WorldState
 
@@ -25,7 +31,25 @@ class Skill(ABC):
     """技能抽象基类。"""
 
     name: str = ""
+    description: str = ""
     required_params: tuple[str, ...] = ()
+    parameters: Mapping[str, ParameterSpec] = {}
+    outputs: Mapping[str, ParameterSpec] = {}
+    side_effect: SideEffect = SideEffect.WORLD
+
+    def capability_spec(self) -> CapabilitySpec:
+        parameters = self.parameters or {
+            name: ParameterSpec((object,), required=True)
+            for name in self.required_params
+        }
+        return CapabilitySpec(
+            name=self.name,
+            kind=CapabilityKind.SKILL,
+            description=self.description or self.name,
+            parameters=parameters,
+            outputs=self.outputs,
+            side_effect=self.side_effect,
+        )
 
     def preconditions(self, world: WorldState, params: Mapping[str, object]) -> bool:
         """执行前置条件，默认恒真，子类可覆盖。"""

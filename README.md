@@ -38,10 +38,10 @@ Natural-language goal
 | `world/` | Immutable WorldState + pure-Python GridWorld |
 | `backends/` | RobotBackend abstraction; SimBackend (default), ROS2Backend (reserved) |
 | `skills/` | Standardized Skill interface + SkillManager; navigate/detect/grasp/place |
-| `planning/` | Planner interface; MockPlanner (rules, default), LLMPlanner (Claude, optional); GoalSpec deterministic goal check |
-| `runtime/` | TaskManager (scheduling), ExecutionMonitor (monitor/verify), AgentRuntime (main loop), event bus |
+| `planning/` | Planner interface; MockPlanner (rules, default), LLMPlanner (Claude, optional); GoalSpec checks; pre-execution PlanValidator |
+| `runtime/` | TaskManager, per-plan ExecutionContext, ExecutionMonitor, AgentRuntime main loop, event bus |
 | `memory/` | Short-term episode stream + long-term JSON KV memory |
-| `tools/` | Tool calling: pure info/compute tools (clear boundary vs. actuation Skills) |
+| `tools/` | Registered read-only info/compute tools whose results can feed later steps (separate from actuation Skills) |
 | `display/` | Real-time HMI: terminal live view + web dashboard (subscribe to the runtime event bus) |
 | `demo/`, `cli.py` | pick-and-place end-to-end demo and command-line entry |
 
@@ -73,8 +73,25 @@ pytest --cov=robot_agent
 During execution the runtime emits structured events through a decoupled **event bus** (`RuntimeObserver`/`RuntimeEvent`). Any display is merely a subscriber — **the runtime never changes**:
 
 - **Terminal live view** (`TerminalMonitor`): ANSI redraw of the grid world + status panel, zero deps.
-- **Web dashboard** (`WebMonitor` + stdlib `http.server` + SSE): browser view of grid/task/recovery, with history replay, zero external deps.
+- **Web dashboard** (`WebMonitor` + stdlib `http.server` + SSE): browser view of grid/task/recovery, with bounded history replay and per-client backpressure, zero external deps.
 - A misbehaving observer is isolated — **a display crash never brings down the robot run**.
+
+### Execution data flow and plan safety
+
+- `EntityResolver` maps exact object IDs and aliases from natural-language goals and rejects ambiguous matches instead of guessing.
+- Skills and tools expose one `CapabilitySpec` contract for descriptions, typed parameters, outputs, and side-effect metadata; validation and LLM prompting consume the same catalog.
+- Every plan step has a stable `step_id`; successful outputs are stored in a per-plan `ExecutionContext`.
+- Later steps use structured `OutputRef` values to consume skill or tool outputs. Missing paths or unexpected values stop execution before the physical action.
+- `PlanValidator` checks step structure, dependencies, registered capabilities, required parameters, and goal alignment before scheduling.
+- The default planner binds `detect.object_ids[0]` to `grasp.object_id` and verifies that the detected object is the requested target.
+- Plan parameters, outputs, world objects, and execution-context values are deeply frozen snapshots. Each `StepRecord` preserves the call kind, raw references, resolved parameters, output, and error type for auditability.
+
+### Reliability and diagnostics
+
+- Long-term Memory validates JSON before an atomic same-directory replace; failed writes leave both the in-memory state and the previous file unchanged, while corrupted files fail explicitly.
+- `AgentRuntime` uses best-effort Memory writes by default and returns structured diagnostics in `RunReport`; strict integrations can select `MemoryFailurePolicy.RAISE`.
+- `LLMPlanner.last_diagnostic` records structured fallback information when an online planner fails and the offline planner takes over.
+- SSE keeps at most 1,000 history events and 256 queued events per subscriber by default. Slow clients drop their oldest queued event so robot execution is never blocked, and `dropped_events()` exposes the count.
 
 ### Development & verification guidance
 
@@ -84,6 +101,15 @@ By default, choose verification by change risk; not every change needs the full 
 - **Single-module, small code change**: run the relevant test file or the minimal affected subset.
 - **Cross-module change, or touching core paths (`planning/`, `runtime/`, `skills/`, `cli.py`)**: run `pytest -q`.
 - **Change affecting dependencies, packaging, entry commands, or the end-to-end path**: run `pytest --cov=robot_agent --cov-report=term-missing -q`; run the demo if needed.
+
+CI validates Python 3.11–3.13 with Ruff lint/format checks, the full coverage suite, and wheel construction. The Docker image installs a non-editable package and runs as the non-root `robot` user.
+
+```bash
+ruff check .
+ruff format --check .
+pytest --cov=robot_agent --cov-report=term-missing -q
+python -m pip wheel . --no-deps --wheel-dir dist
+```
 
 If ROS2 or LLM dependencies are missing locally, out-of-environment verification is not required for optional extension paths not touched this round; note the limitation instead.
 

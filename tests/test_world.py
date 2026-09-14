@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from robot_agent.core.types import Pose
@@ -75,7 +77,7 @@ def test_world_state_is_frozen():
     world = build_world(Pose(0, 0), {})
 
     # Act / Assert：不可变对象禁止就地修改
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         world.robot_pose = Pose(1, 1)  # type: ignore[misc]
 
 
@@ -88,6 +90,12 @@ def test_grid_bounds_and_adjacency():
     assert not grid.in_bounds(Pose(10, 0))
     assert grid.is_adjacent(Pose(5, 5), Pose(5, 6))
     assert not grid.is_adjacent(Pose(5, 5), Pose(5, 7))
+
+
+@pytest.mark.parametrize(("width", "height"), [(0, 10), (10, 0), (-1, 10)])
+def test_grid_rejects_non_positive_dimensions(width, height):
+    with pytest.raises(ValueError):
+        GridWorld(width, height)
 
 
 def test_failure_injection_budget_is_consumed():

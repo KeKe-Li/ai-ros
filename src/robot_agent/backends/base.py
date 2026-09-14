@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Mapping
+from collections.abc import Mapping
 
 from robot_agent.core.types import Pose, SkillResult
 from robot_agent.world.state import WorldState
@@ -31,7 +31,9 @@ class RobotBackend(ABC):
         """在当前位置感知匹配 query 的物体，结果置于 data['object_ids']。"""
 
     @abstractmethod
-    def grasp(self, world: WorldState, object_id: str) -> tuple[SkillResult, WorldState]:
+    def grasp(
+        self, world: WorldState, object_id: str
+    ) -> tuple[SkillResult, WorldState]:
         """抓取指定物体。"""
 
     @abstractmethod

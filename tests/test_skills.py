@@ -9,7 +9,7 @@ from robot_agent.core.errors import UnknownSkillError
 from robot_agent.core.types import Pose, SkillResult
 from robot_agent.skills import default_skill_manager
 from robot_agent.skills.manipulation import PlaceSkill
-from robot_agent.world.grid_world import GridWorld, build_pick_and_place_world
+from robot_agent.world.grid_world import build_pick_and_place_world
 from robot_agent.world.state import ObjectInfo, build_world
 
 
@@ -56,7 +56,17 @@ def test_detect_finds_red_cube_only_when_adjacent():
     # Assert
     assert not far.ok
     assert near.ok
-    assert near.data["object_ids"] == ["red_cube"]
+    assert near.data["object_ids"] == ("red_cube",)
+
+
+def test_detect_respects_explicit_object_id_filter():
+    backend, world = _sim_and_world()
+    _, at_table = backend.navigate_to(world, Pose(5, 5))
+
+    result = backend.detect(at_table, {"object_id": "missing", "graspable": True})
+
+    assert not result.ok
+    assert result.data["object_ids"] == ()
 
 
 def test_grasp_requires_adjacency():
@@ -127,9 +137,7 @@ def test_place_postcondition_requires_held_object_to_enter_target_container():
     before = build_world(
         Pose(0, 0),
         {
-            "old_cube": ObjectInfo(
-                Pose(1, 1), is_graspable=True, in_container="box"
-            ),
+            "old_cube": ObjectInfo(Pose(1, 1), is_graspable=True, in_container="box"),
             "target_cube": ObjectInfo(Pose(0, 0), is_graspable=True),
             "box": ObjectInfo(Pose(1, 1), is_container=True),
         },
@@ -154,9 +162,7 @@ def test_place_postcondition_accepts_correctly_placed_held_object():
     _, before = backend.navigate_to(before, Pose(8, 2))
     result, after = backend.place(before, "box")
 
-    passed = PlaceSkill().postconditions(
-        before, after, {"container_id": "box"}, result
-    )
+    passed = PlaceSkill().postconditions(before, after, {"container_id": "box"}, result)
 
     assert passed is True
 
@@ -230,7 +236,7 @@ def test_full_skill_sequence_reaches_goal_via_manager():
     )
 
     # Assert：闭环达成
-    assert detect_result.data["object_ids"] == ["red_cube"]
+    assert detect_result.data["object_ids"] == ("red_cube",)
     assert place_result.ok
     assert world.get("red_cube").in_container == "box"
     assert world.holding is None

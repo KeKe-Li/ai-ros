@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from robot_agent.core.types import Pose
 from robot_agent.world.state import ObjectInfo, WorldState, build_world
@@ -31,6 +31,8 @@ class GridWorld:
         height: int,
         fail_actions: Mapping[str, int] | None = None,
     ) -> None:
+        if width <= 0 or height <= 0:
+            raise ValueError("网格宽度和高度必须大于 0")
         self.width = width
         self.height = height
         # 复制为可变计数器，随 should_fail 调用递减

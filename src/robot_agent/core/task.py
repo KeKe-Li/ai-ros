@@ -8,10 +8,10 @@ Task 为不可变对象，状态迁移通过返回新副本实现。状态机约
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from enum import Enum
+from enum import StrEnum
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     """任务生命周期状态。"""
 
     PENDING = "pending"
@@ -46,7 +46,7 @@ class Task:
         """是否处于终态（成功或失败）。"""
         return self.status in (TaskStatus.SUCCEEDED, TaskStatus.FAILED)
 
-    def to(self, status: TaskStatus, error: str | None = None) -> "Task":
+    def to(self, status: TaskStatus, error: str | None = None) -> Task:
         """迁移到新状态，返回新副本。
 
         非法迁移抛出 ValueError，防止状态机被错误驱动。

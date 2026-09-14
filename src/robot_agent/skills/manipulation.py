@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from robot_agent.backends.base import RobotBackend
+from robot_agent.core.capabilities import ParameterSpec
 from robot_agent.core.types import SkillResult
 from robot_agent.skills.base import Skill
 from robot_agent.world.state import WorldState
@@ -14,7 +15,9 @@ class GraspSkill(Skill):
     """抓取可抓取物体（object_id）。"""
 
     name = "grasp"
+    description = "抓取目标物体"
     required_params = ("object_id",)
+    parameters = {"object_id": ParameterSpec((str,), required=True)}
 
     def preconditions(self, world: WorldState, params: Mapping[str, object]) -> bool:
         obj = world.get(str(params["object_id"]))
@@ -42,11 +45,17 @@ class PlaceSkill(Skill):
     """把当前持有物放入容器（container_id）。"""
 
     name = "place"
+    description = "把当前持有物放入目标容器"
     required_params = ("container_id",)
+    parameters = {"container_id": ParameterSpec((str,), required=True)}
 
     def preconditions(self, world: WorldState, params: Mapping[str, object]) -> bool:
         container = world.get(str(params["container_id"]))
-        return world.holding is not None and container is not None and container.is_container
+        return (
+            world.holding is not None
+            and container is not None
+            and container.is_container
+        )
 
     def execute(
         self,

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from robot_agent.core.frozen import to_jsonable
 from robot_agent.runtime.events import RuntimeEvent
 from robot_agent.world.state import WorldState
 
@@ -55,9 +56,14 @@ def event_to_dict(event: RuntimeEvent) -> dict[str, Any]:
     if event.step is not None:
         payload["step"] = {
             "skill": event.step.skill,
+            "step_id": event.step.step_id,
             "status": event.step.status,
             "message": event.step.message,
             "attempt": event.step.attempt,
-            "params": dict(event.step.params),
+            "kind": event.step.kind,
+            "params": to_jsonable(event.step.params),
+            "raw_params": to_jsonable(event.step.raw_params),
+            "output": to_jsonable(event.step.output),
+            "error_type": event.step.error_type,
         }
     return payload

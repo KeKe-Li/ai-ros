@@ -11,21 +11,39 @@ anthropic，避免核心框架产生硬依赖。
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
+from dataclasses import dataclass
 
-from robot_agent.planning.base import Plan, Planner, SkillCall
+from robot_agent.core.capabilities import CapabilityKind, CapabilitySpec
+from robot_agent.planning.base import (
+    OutputRef,
+    Plan,
+    Planner,
+    PlanStep,
+    SkillCall,
+    ToolCall,
+)
 from robot_agent.planning.mock_planner import MockPlanner
 from robot_agent.world.state import WorldState
 
-# 允许 LLM 使用的技能白名单，防止产出未知技能
-_ALLOWED_SKILLS = frozenset({"navigate", "detect", "grasp", "place"})
-
-_SYSTEM = (
+_SYSTEM_PREFIX = (
     "你是机器人任务规划器。给定自然语言目标与世界状态，输出把目标分解为技能调用的 JSON。"
-    "只允许使用技能：navigate(target_object)、detect(color,graspable)、grasp(object_id)、"
-    "place(container_id)。严格输出 JSON，形如："
-    '{"steps":[{"skill":"navigate","params":{"target_object":"red_cube"},"depends_on":[]},'
-    '{"skill":"grasp","params":{"object_id":"red_cube"},"depends_on":[0]}]}。不要输出解释。'
+    "严格输出 JSON，形如："
+    '{"steps":[{"id":"detect_object","skill":"detect",'
+    '"params":{"object_id":"red_cube"},"depends_on":[]},'
+    '{"id":"grasp_object","skill":"grasp","params":{"object_id":'
+    '{"$ref":{"step_id":"detect_object","path":["object_ids",0],'
+    '"expected":"red_cube"}}},"depends_on":[0]}]}。'
+    "只读工具步骤使用 tool 字段。不要输出解释。"
 )
+
+
+@dataclass(frozen=True)
+class PlannerDiagnostic:
+    source: str
+    stage: str
+    error_type: str
+    message: str
 
 
 class LLMPlanner(Planner):
@@ -36,19 +54,30 @@ class LLMPlanner(Planner):
         model: str = "claude-sonnet-5",
         max_tokens: int = 1024,
         fallback: Planner | None = None,
+        capabilities: Sequence[CapabilitySpec] | None = None,
     ) -> None:
         self._model = model
         self._max_tokens = max_tokens
         self._fallback = fallback or MockPlanner()
+        self._capabilities = tuple(capabilities or _default_capabilities())
+        self._system = _build_system(self._capabilities)
         self.last_source: str = "unset"  # "llm" 或 "fallback"，供调用方观测
+        self.last_diagnostic: PlannerDiagnostic | None = None
 
     def plan(self, goal: str, world: WorldState) -> Plan:
         try:
             plan = self._plan_via_llm(goal, world)
             self.last_source = "llm"
+            self.last_diagnostic = None
             return plan
-        except Exception:  # 任何失败都回退，保证可用性与可复现
+        except Exception as exc:  # 任何失败都回退，保证可用性与可复现
             self.last_source = "fallback"
+            self.last_diagnostic = PlannerDiagnostic(
+                source="fallback",
+                stage="plan",
+                error_type=type(exc).__name__,
+                message=str(exc),
+            )
             return self._fallback.plan(goal, world)
 
     # --- 内部实现 ---
@@ -61,13 +90,15 @@ class LLMPlanner(Planner):
         response = client.messages.create(
             model=self._model,
             max_tokens=self._max_tokens,
-            system=_SYSTEM,
+            system=self._system,
             messages=[{"role": "user", "content": prompt}],
         )
         text = "".join(
-            block.text for block in response.content if getattr(block, "type", "") == "text"
+            block.text
+            for block in response.content
+            if getattr(block, "type", "") == "text"
         )
-        return self._parse_plan(goal, text)
+        return self._parse_plan(goal, text, capabilities=self._capabilities)
 
     @staticmethod
     def _describe_world(world: WorldState) -> str:
@@ -91,17 +122,43 @@ class LLMPlanner(Planner):
         )
 
     @staticmethod
-    def _parse_plan(goal: str, text: str) -> Plan:
+    def _parse_plan(
+        goal: str,
+        text: str,
+        capabilities: Sequence[CapabilitySpec] | None = None,
+    ) -> Plan:
+        specs = tuple(capabilities or _default_capabilities())
+        allowed_skills = {
+            spec.name for spec in specs if spec.kind is CapabilityKind.SKILL
+        }
+        allowed_tools = {
+            spec.name for spec in specs if spec.kind is CapabilityKind.TOOL
+        }
         payload = json.loads(_extract_json(text))
         raw_steps = payload["steps"]
-        steps: list[SkillCall] = []
-        for raw in raw_steps:
-            skill = raw["skill"]
-            if skill not in _ALLOWED_SKILLS:
-                raise ValueError(f"LLM 产出未知技能：{skill}")
-            params = dict(raw.get("params", {}))
+        if not isinstance(raw_steps, list):
+            raise ValueError("LLM 计划的 steps 必须是列表")
+        steps: list[PlanStep] = []
+        for index, raw in enumerate(raw_steps):
+            if not isinstance(raw, dict):
+                raise ValueError(f"LLM 计划步骤 {index} 必须是对象")
+            step_id = str(raw.get("id", f"step_{index}"))
+            params = _decode_value(raw.get("params", {}))
+            if not isinstance(params, dict):
+                raise ValueError(f"LLM 计划步骤 {step_id} 的 params 必须是对象")
             depends_on = tuple(int(d) for d in raw.get("depends_on", []))
-            steps.append(SkillCall(skill, params, depends_on))
+            if "skill" in raw and "tool" not in raw:
+                skill = str(raw["skill"])
+                if skill not in allowed_skills:
+                    raise ValueError(f"LLM 产出未知技能：{skill}")
+                steps.append(SkillCall(skill, params, depends_on, step_id))
+            elif "tool" in raw and "skill" not in raw:
+                tool = str(raw["tool"])
+                if tool not in allowed_tools:
+                    raise ValueError(f"LLM 产出未知工具：{tool}")
+                steps.append(ToolCall(tool, params, depends_on, step_id))
+            else:
+                raise ValueError(f"LLM 计划步骤 {step_id} 必须且只能指定 skill 或 tool")
         return Plan(goal=goal, steps=tuple(steps))
 
 
@@ -112,3 +169,48 @@ def _extract_json(text: str) -> str:
     if start == -1 or end == -1 or end < start:
         raise ValueError("响应中未找到 JSON")
     return text[start : end + 1]
+
+
+def _decode_value(value: object) -> object:
+    """递归解码 LLM JSON 中的结构化输出引用。"""
+    if isinstance(value, dict):
+        if set(value) == {"$ref"}:
+            raw_ref = value["$ref"]
+            if not isinstance(raw_ref, dict):
+                raise ValueError("$ref 必须是对象")
+            raw_path = raw_ref.get("path")
+            if not isinstance(raw_path, list) or not all(
+                isinstance(part, (str, int)) and not isinstance(part, bool)
+                for part in raw_path
+            ):
+                raise ValueError("$ref.path 必须是由字符串或整数构成的列表")
+            return OutputRef(
+                step_id=str(raw_ref["step_id"]),
+                path=tuple(raw_path),
+                expected=raw_ref.get("expected"),
+            )
+        return {key: _decode_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_decode_value(item) for item in value]
+    return value
+
+
+def _default_capabilities() -> tuple[CapabilitySpec, ...]:
+    """从默认注册表构建 LLM 可用能力，避免维护第二份白名单。"""
+    from robot_agent.skills import default_skill_manager
+    from robot_agent.tools import default_tool_registry
+
+    return default_skill_manager().specs() + default_tool_registry().specs()
+
+
+def _build_system(capabilities: Sequence[CapabilitySpec]) -> str:
+    lines = [_SYSTEM_PREFIX, "可用能力："]
+    for spec in capabilities:
+        parameters = ", ".join(
+            f"{name}{'' if parameter.required else '?'}"
+            for name, parameter in spec.parameters.items()
+        )
+        lines.append(
+            f"- {spec.kind.value}:{spec.name}({parameters}) - {spec.description}"
+        )
+    return "\n".join(lines)

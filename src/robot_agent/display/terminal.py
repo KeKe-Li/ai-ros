@@ -39,9 +39,7 @@ def _cell_symbol(world: WorldState, x: int, y: int) -> str:
     if world.robot_pose.x == x and world.robot_pose.y == y:
         return "R"
     infos = [
-        info
-        for info in world.objects.values()
-        if info.pose.x == x and info.pose.y == y
+        info for info in world.objects.values() if info.pose.x == x and info.pose.y == y
     ]
     if not infos:
         return "."
@@ -68,7 +66,9 @@ def render_frame(event: RuntimeEvent) -> str:
     if event.step is not None:
         icon = "✅" if event.step.status == "ok" else "❌"
         retry = f" [重试#{event.step.attempt}]" if event.step.attempt > 0 else ""
-        lines.append(f"│ 当前步骤：{icon} {event.step.skill}{retry} — {event.step.message}")
+        lines.append(
+            f"│ 当前步骤：{icon} {event.step.skill}{retry} — {event.step.message}"
+        )
     if event.kind == "replan":
         lines.append(f"│ 重规划：第 {event.replans} 次 — {event.message}")
     lines.append(f"│ 持有物：{world.holding or '（空）'}")
@@ -100,6 +100,8 @@ class TerminalMonitor:
             stream: 输出流，默认 stdout（测试时可注入 StringIO）。
             clear: 是否每帧清屏刷新（测试时通常置 False）。
         """
+        if step_delay < 0:
+            raise ValueError("step_delay 不能小于 0")
         self._step_delay = step_delay
         self._stream = stream if stream is not None else sys.stdout
         self._clear = clear

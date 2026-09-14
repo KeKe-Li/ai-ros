@@ -6,12 +6,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
+from robot_agent.core.frozen import freeze_mapping
 
-class SkillStatus(str, Enum):
+
+class SkillStatus(StrEnum):
     """技能执行状态。"""
 
     SUCCESS = "success"
@@ -28,7 +31,10 @@ class SkillResult:
 
     status: SkillStatus
     message: str = ""
-    data: dict[str, Any] = field(default_factory=dict)
+    data: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "data", freeze_mapping(self.data))
 
     @property
     def ok(self) -> bool:
@@ -36,12 +42,12 @@ class SkillResult:
         return self.status is SkillStatus.SUCCESS
 
     @classmethod
-    def success(cls, message: str = "", **data: Any) -> "SkillResult":
+    def success(cls, message: str = "", **data: Any) -> SkillResult:
         """构造成功结果的便捷方法。"""
         return cls(SkillStatus.SUCCESS, message, dict(data))
 
     @classmethod
-    def failure(cls, message: str = "", **data: Any) -> "SkillResult":
+    def failure(cls, message: str = "", **data: Any) -> SkillResult:
         """构造失败结果的便捷方法。"""
         return cls(SkillStatus.FAILURE, message, dict(data))
 
@@ -53,6 +59,6 @@ class Pose:
     x: int
     y: int
 
-    def manhattan(self, other: "Pose") -> int:
+    def manhattan(self, other: Pose) -> int:
         """到另一位姿的曼哈顿距离，用于路径步数估算。"""
         return abs(self.x - other.x) + abs(self.y - other.y)

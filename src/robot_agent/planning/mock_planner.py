@@ -10,7 +10,7 @@ planning.goal.parse_goal（集中一处，DRY），再结合当前世界生成�
 
 from __future__ import annotations
 
-from robot_agent.planning.base import Plan, Planner, SkillCall
+from robot_agent.planning.base import OutputRef, Plan, Planner, SkillCall
 from robot_agent.planning.goal import InContainerGoal, parse_goal
 from robot_agent.world.state import WorldState
 
@@ -36,26 +36,65 @@ class MockPlanner(Planner):
             target_pose = world.objects[object_id].pose
             if world.robot_pose != target_pose:
                 steps.append(
-                    _linked(steps, SkillCall("navigate", {"target_object": object_id}))
+                    _linked(
+                        steps,
+                        SkillCall(
+                            "navigate",
+                            {"target_object": object_id},
+                            step_id="navigate_object",
+                        ),
+                    )
                 )
             steps.append(
                 _linked(
                     steps,
                     SkillCall(
                         "detect",
-                        {"color": color, "graspable": True}
+                        {"object_id": object_id, "color": color, "graspable": True}
                         if color
-                        else {"graspable": True},
+                        else {"object_id": object_id, "graspable": True},
+                        step_id="detect_object",
                     ),
                 )
             )
-            steps.append(_linked(steps, SkillCall("grasp", {"object_id": object_id})))
+            steps.append(
+                _linked(
+                    steps,
+                    SkillCall(
+                        "grasp",
+                        {
+                            "object_id": OutputRef(
+                                "detect_object",
+                                path=("object_ids", 0),
+                                expected=object_id,
+                            )
+                        },
+                        step_id="grasp_object",
+                    ),
+                )
+            )
 
         # 导航到容器并放置
         steps.append(
-            _linked(steps, SkillCall("navigate", {"target_object": container_id}))
+            _linked(
+                steps,
+                SkillCall(
+                    "navigate",
+                    {"target_object": container_id},
+                    step_id="navigate_container",
+                ),
+            )
         )
-        steps.append(_linked(steps, SkillCall("place", {"container_id": container_id})))
+        steps.append(
+            _linked(
+                steps,
+                SkillCall(
+                    "place",
+                    {"container_id": container_id},
+                    step_id="place_object",
+                ),
+            )
+        )
 
         return Plan(goal=goal, steps=tuple(steps))
 
@@ -64,4 +103,9 @@ def _linked(existing: list[SkillCall], call: SkillCall) -> SkillCall:
     """把 call 线性链接到已有步骤末尾：依赖上一步（若存在）。"""
     if not existing:
         return call
-    return SkillCall(call.skill, call.params, depends_on=(len(existing) - 1,))
+    return SkillCall(
+        call.skill,
+        call.params,
+        depends_on=(len(existing) - 1,),
+        step_id=call.step_id,
+    )

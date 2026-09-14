@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+
+from robot_agent.core.errors import MemoryCorruptionError
 from robot_agent.memory.memory import Memory
 
 
@@ -72,3 +75,23 @@ def test_long_term_persists_to_file(tmp_path):
     assert path.exists()
     reloaded = Memory(store_path=path)
     assert reloaded.recall("success_count") == 3
+
+
+def test_failed_store_does_not_modify_memory_or_disk(tmp_path):
+    path = tmp_path / "memory.json"
+    memory = Memory(path)
+    memory.store("ok", 1)
+
+    with pytest.raises(TypeError):
+        memory.store("bad", object())
+
+    assert memory.recall("bad") is None
+    assert Memory(path).recall("ok") == 1
+
+
+def test_corrupted_store_raises_domain_error(tmp_path):
+    path = tmp_path / "memory.json"
+    path.write_text("{broken", encoding="utf-8")
+
+    with pytest.raises(MemoryCorruptionError, match="损坏"):
+        Memory(path)

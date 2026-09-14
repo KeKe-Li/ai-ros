@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import io
 
+import pytest
+
 from robot_agent.backends.sim_backend import SimBackend
-from robot_agent.core.types import Pose
 from robot_agent.display.terminal import TerminalMonitor, render_frame
 from robot_agent.planning.mock_planner import MockPlanner
 from robot_agent.runtime.agent_runtime import AgentRuntime
@@ -111,6 +112,11 @@ def test_terminal_monitor_writes_frames_to_stream():
     # Assert：输出包含多帧监控画面与最终状态
     assert output.count("上位机监控") >= 5
     assert "任务状态：succeeded" in output
+
+
+def test_terminal_monitor_rejects_negative_step_delay():
+    with pytest.raises(ValueError, match="step_delay"):
+        TerminalMonitor(step_delay=-0.1)
 
 
 def test_broken_observer_does_not_crash_runtime():

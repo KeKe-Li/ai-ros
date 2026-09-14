@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
+from robot_agent.core.capabilities import (
+    CapabilityKind,
+    CapabilitySpec,
+    ParameterSpec,
+    SideEffect,
+)
 from robot_agent.core.types import Pose
 from robot_agent.world.state import WorldState
 
@@ -16,6 +23,7 @@ class Tool:
     name: str
     description: str
     func: Callable[..., Any]
+    capability: CapabilitySpec
 
 
 class ToolRegistry:
@@ -24,10 +32,26 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
 
-    def register(self, name: str, description: str, func: Callable[..., Any]) -> None:
+    def register(
+        self,
+        name: str,
+        description: str,
+        func: Callable[..., Any],
+        *,
+        parameters: Mapping[str, ParameterSpec] | None = None,
+        outputs: Mapping[str, ParameterSpec] | None = None,
+    ) -> None:
         if name in self._tools:
             raise ValueError(f"工具重复注册：{name}")
-        self._tools[name] = Tool(name, description, func)
+        capability = CapabilitySpec(
+            name=name,
+            kind=CapabilityKind.TOOL,
+            description=description,
+            parameters=dict(parameters or {}),
+            outputs=dict(outputs or {"value": ParameterSpec((object,), required=True)}),
+            side_effect=SideEffect.NONE,
+        )
+        self._tools[name] = Tool(name, description, func, capability)
 
     def names(self) -> list[str]:
         return sorted(self._tools)
@@ -35,6 +59,14 @@ class ToolRegistry:
     def describe(self) -> dict[str, str]:
         """返回 名称->描述 映射，供 Planner/Agent 发现可用工具。"""
         return {name: tool.description for name, tool in sorted(self._tools.items())}
+
+    def spec(self, name: str) -> CapabilitySpec:
+        if name not in self._tools:
+            raise KeyError(f"未注册的工具：{name}")
+        return self._tools[name].capability
+
+    def specs(self) -> tuple[CapabilitySpec, ...]:
+        return tuple(self._tools[name].capability for name in self.names())
 
     def call(self, name: str, *args: Any, **kwargs: Any) -> Any:
         if name not in self._tools:
@@ -69,7 +101,25 @@ def estimate_path_cost(world: WorldState, target_id: str) -> int | None:
 def default_tool_registry() -> ToolRegistry:
     """注册全部内置信息工具。"""
     registry = ToolRegistry()
-    registry.register("locate_object", "查询物体坐标", locate_object)
-    registry.register("count_objects", "按颜色统计物体数量", count_objects)
-    registry.register("estimate_path_cost", "估算到目标的步数", estimate_path_cost)
+    registry.register(
+        "locate_object",
+        "查询物体坐标",
+        locate_object,
+        parameters={"object_id": ParameterSpec((str,), required=True)},
+        outputs={"value": ParameterSpec((Pose, type(None)), required=True)},
+    )
+    registry.register(
+        "count_objects",
+        "按颜色统计物体数量",
+        count_objects,
+        parameters={"color": ParameterSpec((str,))},
+        outputs={"value": ParameterSpec((int,), required=True)},
+    )
+    registry.register(
+        "estimate_path_cost",
+        "估算到目标的步数",
+        estimate_path_cost,
+        parameters={"target_id": ParameterSpec((str,), required=True)},
+        outputs={"value": ParameterSpec((int, type(None)), required=True)},
+    )
     return registry

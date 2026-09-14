@@ -37,10 +37,10 @@
 | `world/` | 不可变世界状态 WorldState + 纯 Python 网格世界 GridWorld |
 | `backends/` | 机器人执行层抽象 RobotBackend；SimBackend（默认）、ROS2Backend（预留） |
 | `skills/` | 标准化技能接口 Skill + SkillManager；导航/检测/抓取/放置 |
-| `planning/` | Planner 接口；MockPlanner（规则，默认）、LLMPlanner（Claude，可选）；GoalSpec 确定性目标判定 |
-| `runtime/` | TaskManager（调度）、ExecutionMonitor（监控/校验）、AgentRuntime（主循环）、事件总线 |
+| `planning/` | Planner 接口；MockPlanner（规则，默认）、LLMPlanner（Claude，可选）；GoalSpec 目标判定；PlanValidator 执行前验证 |
+| `runtime/` | TaskManager（调度）、ExecutionContext（步骤输出传递）、ExecutionMonitor（监控/校验）、AgentRuntime（主循环）、事件总线 |
 | `memory/` | 短期 episode 事件流 + 长期 JSON KV 记忆 |
-| `tools/` | ToolCalling：注册纯信息/计算工具（与产生物理动作的 Skill 边界清晰） |
+| `tools/` | Tool Calling：注册并执行纯信息/计算工具，结果可被后续步骤引用（与产生物理动作的 Skill 边界清晰） |
 | `display/` | 上位机实时监控：终端实时视图 + Web 仪表盘（订阅运行时事件总线） |
 | `demo/`、`cli.py` | pick-and-place 端到端演示与命令行入口 |
 
@@ -72,8 +72,25 @@ pytest --cov=robot_agent
 运行时在执行过程中通过一条解耦的**事件总线**（`RuntimeObserver`/`RuntimeEvent`）实时发出结构化事件。任何显示端只是订阅者，**运行时无需改动**：
 
 - **终端实时视图**（`TerminalMonitor`）：用 ANSI 转义实时重绘网格世界 + 状态面板，零依赖。
-- **Web 仪表盘**（`WebMonitor` + 标准库 `http.server` + SSE）：浏览器实时查看网格/任务/恢复，支持历史回放，零外部依赖。
+- **Web 仪表盘**（`WebMonitor` + 标准库 `http.server` + SSE）：浏览器实时查看网格/任务/恢复，支持有界历史回放和客户端背压，零外部依赖。
 - 显示端异常被隔离，**GUI 崩溃不会拖垮机器人运行**。
+
+### 执行数据流与计划安全
+
+- `EntityResolver` 从自然语言目标中精确解析对象 ID 与别名；存在多个候选时明确拒绝，不做猜测。
+- Skill 与 Tool 统一暴露 `CapabilitySpec`，集中声明描述、参数类型、输出和副作用；计划验证与 LLM 提示词共用同一份能力目录。
+- 每个计划步骤具有稳定 `step_id`，成功输出记录在当次计划的 `ExecutionContext` 中。
+- 后续步骤通过结构化 `OutputRef` 引用技能或工具输出；引用缺失、路径错误或值不符合预期时不会执行物理动作。
+- `PlanValidator` 在调度前验证步骤、依赖、注册能力、必需参数和目标一致性。
+- 默认规则规划器使用 `detect` 的真实 `object_ids[0]` 驱动 `grasp`，并校验检测对象就是目标对象。
+- 计划参数、输出、世界对象和执行上下文都保存为深不可变快照；每条 `StepRecord` 完整保留调用类型、原始引用、解析后参数、输出与错误类型，便于审计。
+
+### 可靠性与诊断
+
+- 长期 Memory 先校验 JSON，再通过同目录临时文件原子替换；写入失败时内存状态和旧文件均保持不变，损坏文件会明确报错。
+- `AgentRuntime` 默认以 best-effort 策略写 Memory，并在 `RunReport` 返回结构化诊断；严格集成可选择 `MemoryFailurePolicy.RAISE`。
+- 在线规划失败并回退离线规划器时，`LLMPlanner.last_diagnostic` 会保留结构化原因。
+- SSE 默认最多保留 1000 条历史、每个订阅者积压 256 条事件。慢客户端会丢弃自身最旧事件，不会阻塞机器人执行；`dropped_events()` 可查询累计数量。
 
 ### 开发与验证建议
 
@@ -83,6 +100,15 @@ pytest --cov=robot_agent
 - **单模块、小范围代码改动**：优先运行相关测试文件或最小受影响测试集。
 - **跨模块改动，或涉及 `planning/`、`runtime/`、`skills/`、`cli.py` 等核心链路**：运行 `pytest -q`。
 - **影响依赖、打包、入口命令或端到端链路的改动**：运行 `pytest --cov=robot_agent --cov-report=term-missing -q`；必要时再运行 demo 命令。
+
+CI 在 Python 3.11–3.13 上执行 Ruff 静态检查与格式检查、完整覆盖率测试和 wheel 构建。Docker 镜像使用非 editable 安装，并以非 root 的 `robot` 用户运行。
+
+```bash
+ruff check .
+ruff format --check .
+pytest --cov=robot_agent --cov-report=term-missing -q
+python -m pip wheel . --no-deps --wheel-dir dist
+```
 
 若本地环境缺少 ROS2 或 LLM 依赖，不要求为本轮未触达的可选扩展路径补做环境外验证；相关限制应在说明中写明。
 

@@ -14,10 +14,6 @@ class UnknownSkillError(RobotAgentError):
     """请求调用了未注册的技能。"""
 
 
-class PreconditionError(RobotAgentError):
-    """技能前置条件不满足。"""
-
-
 class PlanningError(RobotAgentError):
     """规划器无法从目标生成有效计划。"""
 
@@ -28,3 +24,11 @@ class SchedulingError(RobotAgentError):
 
 class BackendNotAvailableError(RobotAgentError):
     """请求的机器人执行后端在当前环境不可用（如 ROS2 未安装）。"""
+
+
+class OutputResolutionError(RobotAgentError):
+    """计划步骤引用的上游输出不存在、路径无效或值不符合预期。"""
+
+
+class MemoryCorruptionError(RobotAgentError):
+    """长期记忆文件损坏或根结构不合法。"""

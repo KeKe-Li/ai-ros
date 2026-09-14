@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from robot_agent.cli import main
-from robot_agent.demo.pick_and_place import DEFAULT_GOAL, run_demo
+from robot_agent.demo.pick_and_place import run_demo
 from robot_agent.memory.memory import Memory
 
 

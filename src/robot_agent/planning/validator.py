@@ -23,6 +23,8 @@ class PlanValidator:
         *,
         max_steps: int = 64,
     ) -> None:
+        if max_steps <= 0:
+            raise ValueError("max_steps 必须大于 0")
         self._skills = skills
         self._tools = tools
         self._max_steps = max_steps
@@ -107,13 +109,16 @@ class PlanValidator:
         self, step: SkillCall, goal: GoalSpec, world: WorldState
     ) -> None:
         try:
-            skill = self._skills.get(step.skill)
+            self._skills.get(step.skill)
         except UnknownSkillError as exc:
             raise PlanningError(str(exc)) from exc
 
-        missing = [name for name in skill.required_params if name not in step.params]
-        if missing:
-            raise PlanningError(f"步骤 {step.step_id} 缺少必需参数：{missing}")
+        try:
+            self._skills.spec(step.skill).validate_params(
+                step.params, dynamic_types=(OutputRef,)
+            )
+        except ValueError as exc:
+            raise PlanningError(f"步骤 {step.step_id} 参数无效：{exc}") from exc
 
         if not isinstance(goal, InContainerGoal):
             return
@@ -140,6 +145,12 @@ class PlanValidator:
     def _validate_tool(self, step: ToolCall) -> None:
         if self._tools is None or step.tool not in self._tools.names():
             raise PlanningError(f"未注册的工具：{step.tool}")
+        try:
+            self._tools.spec(step.tool).validate_params(
+                step.params, dynamic_types=(OutputRef,)
+            )
+        except ValueError as exc:
+            raise PlanningError(f"步骤 {step.step_id} 参数无效：{exc}") from exc
 
     @staticmethod
     def _validate_known_entity(
@@ -153,9 +164,7 @@ class PlanValidator:
             )
 
     @staticmethod
-    def _validate_goal_entity(
-        step: SkillCall, parameter: str, expected: str
-    ) -> None:
+    def _validate_goal_entity(step: SkillCall, parameter: str, expected: str) -> None:
         value = step.params.get(parameter)
         entity_id = value.expected if isinstance(value, OutputRef) else value
         if entity_id != expected:

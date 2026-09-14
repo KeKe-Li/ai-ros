@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from robot_agent.backends.sim_backend import SimBackend
 from robot_agent.planning.base import Planner

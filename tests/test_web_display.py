@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import urllib.request
 
+import pytest
+
 from robot_agent.backends.sim_backend import SimBackend
 from robot_agent.display.web import (
     DashboardServer,
@@ -74,6 +76,39 @@ def test_broadcaster_replays_history_to_late_subscriber():
     assert bus.latest() == {"n": 2}
 
 
+def test_broadcaster_history_is_bounded():
+    bus = EventBroadcaster(history_limit=2)
+
+    bus.publish({"n": 1})
+    bus.publish({"n": 2})
+    bus.publish({"n": 3})
+
+    assert bus.history() == [{"n": 2}, {"n": 3}]
+    assert bus.latest() == {"n": 3}
+
+
+def test_broadcaster_drops_oldest_event_for_slow_subscriber():
+    bus = EventBroadcaster(queue_limit=2)
+    q = bus.subscribe()
+
+    bus.publish({"n": 1})
+    bus.publish({"n": 2})
+    bus.publish({"n": 3})
+
+    assert q.get_nowait() == {"n": 2}
+    assert q.get_nowait() == {"n": 3}
+    assert bus.dropped_events() == 1
+
+
+@pytest.mark.parametrize(
+    ("parameter", "value"),
+    [("history_limit", 0), ("queue_limit", 0)],
+)
+def test_broadcaster_rejects_non_positive_limits(parameter, value):
+    with pytest.raises(ValueError):
+        EventBroadcaster(**{parameter: value})
+
+
 def test_unsubscribe_stops_delivery():
     # Arrange
     bus = EventBroadcaster()
@@ -107,6 +142,11 @@ def test_web_monitor_publishes_full_run():
     assert kinds[0] == "task_started"
     assert kinds[-1] == "task_finished"
     assert kinds.count("step_result") == 5
+
+
+def test_web_monitor_rejects_negative_interval():
+    with pytest.raises(ValueError, match="min_interval"):
+        WebMonitor(EventBroadcaster(), min_interval=-0.1)
 
 
 def _serve(bus):
@@ -164,7 +204,7 @@ def test_http_events_streams_sse():
             for _ in range(10):
                 raw = resp.readline().decode("utf-8").strip()
                 if raw.startswith("data:"):
-                    data_line = raw[len("data:"):].strip()
+                    data_line = raw[len("data:") :].strip()
                     break
 
         # Assert
@@ -172,3 +212,9 @@ def test_http_events_streams_sse():
         assert json.loads(data_line)["goal"] == GOAL
     finally:
         server.stop()
+
+
+@pytest.mark.parametrize("port", [-1, 65536])
+def test_dashboard_server_rejects_invalid_port(port):
+    with pytest.raises(ValueError, match="port"):
+        DashboardServer(EventBroadcaster(), port=port)

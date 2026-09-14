@@ -8,9 +8,10 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from robot_agent.backends.base import RobotBackend
+from robot_agent.core.capabilities import CapabilitySpec
 from robot_agent.core.errors import UnknownSkillError
 from robot_agent.core.types import SkillResult
 from robot_agent.skills.base import Skill
@@ -42,6 +43,13 @@ class SkillManager:
         """列出全部已注册技能名（排序，便于展示与发现）。"""
         return sorted(self._skills)
 
+    def spec(self, name: str) -> CapabilitySpec:
+        """返回技能的统一能力契约。"""
+        return self.get(name).capability_spec()
+
+    def specs(self) -> tuple[CapabilitySpec, ...]:
+        return tuple(self._skills[name].capability_spec() for name in self.names())
+
     def invoke(
         self,
         name: str,
@@ -51,9 +59,10 @@ class SkillManager:
     ) -> tuple[SkillResult, WorldState]:
         """统一调用入口：校验参数与前置条件后执行。"""
         skill = self.get(name)
-        missing = [p for p in skill.required_params if p not in params]
-        if missing:
-            return SkillResult.failure(f"缺少必需参数：{missing}"), world
+        try:
+            skill.capability_spec().validate_params(params)
+        except ValueError as exc:
+            return SkillResult.failure(str(exc)), world
         if not skill.preconditions(world, params):
             return SkillResult.failure(f"前置条件不满足：{name}"), world
         return skill.execute(backend, world, params)

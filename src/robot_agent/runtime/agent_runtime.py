@@ -14,17 +14,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Mapping, Protocol, Sequence
+from enum import StrEnum
+from typing import Protocol
 
 from robot_agent.backends.base import RobotBackend
 from robot_agent.core.task import Task, TaskStatus
 from robot_agent.core.types import SkillResult
-from robot_agent.planning.base import PlanStep, Planner, SkillCall, ToolCall
+from robot_agent.planning.base import Planner, PlanStep, SkillCall, ToolCall
 from robot_agent.planning.goal import parse_goal
 from robot_agent.planning.validator import PlanValidator
 from robot_agent.runtime.context import ExecutionContext
-from robot_agent.runtime.events import RuntimeEvent, RuntimeObserver, StepRecord
+from robot_agent.runtime.events import (
+    RuntimeDiagnostic,
+    RuntimeEvent,
+    RuntimeObserver,
+    StepRecord,
+)
 from robot_agent.runtime.monitor import ExecutionMonitor
 from robot_agent.runtime.task_manager import TaskManager
 from robot_agent.skills.manager import SkillManager
@@ -38,6 +45,13 @@ class MemorySink(Protocol):
     def record(self, kind: str, **fields: object) -> None: ...
 
 
+class MemoryFailurePolicy(StrEnum):
+    """可选 MemorySink 失败时的运行策略。"""
+
+    BEST_EFFORT = "best_effort"
+    RAISE = "raise"
+
+
 @dataclass(frozen=True)
 class RunReport:
     """一次运行的结果报告。"""
@@ -46,6 +60,7 @@ class RunReport:
     world: WorldState
     trace: tuple[StepRecord, ...] = field(default_factory=tuple)
     replans: int = 0
+    diagnostics: tuple[RuntimeDiagnostic, ...] = field(default_factory=tuple)
 
     @property
     def succeeded(self) -> bool:
@@ -66,10 +81,15 @@ class AgentRuntime:
         tools: ToolRegistry | None = None,
         plan_validator: PlanValidator | None = None,
         memory: MemorySink | None = None,
+        memory_failure_policy: MemoryFailurePolicy = MemoryFailurePolicy.BEST_EFFORT,
         observers: Sequence[RuntimeObserver] | None = None,
         max_retries: int = 2,
         max_replans: int = 2,
     ) -> None:
+        if max_retries < 0:
+            raise ValueError("max_retries 不能小于 0")
+        if max_replans < 0:
+            raise ValueError("max_replans 不能小于 0")
         self._backend = backend
         self._skills = skill_manager
         self._planner = planner
@@ -78,12 +98,15 @@ class AgentRuntime:
         self._tools = tools
         self._plan_validator = plan_validator or PlanValidator(skill_manager, tools)
         self._memory = memory
+        self._memory_failure_policy = memory_failure_policy
+        self._diagnostics: list[RuntimeDiagnostic] = []
         self._observers = tuple(observers or ())
         self._max_retries = max_retries
         self._max_replans = max_replans
 
     def run(self, goal: str, world: WorldState) -> RunReport:
         """执行一个目标，返回运行报告。"""
+        self._diagnostics = []
         task = Task(goal).to(TaskStatus.RUNNING)
         self._remember("task_started", goal=goal)
         self._emit(RuntimeEvent("task_started", world=world, goal=goal, task=task))
@@ -175,7 +198,11 @@ class AgentRuntime:
             )
         )
         return RunReport(
-            task=task, world=world, trace=tuple(trace), replans=replans
+            task=task,
+            world=world,
+            trace=tuple(trace),
+            replans=replans,
+            diagnostics=tuple(self._diagnostics),
         )
 
     def _failure_report(
@@ -207,6 +234,7 @@ class AgentRuntime:
             world=world,
             trace=tuple(trace),
             replans=replans,
+            diagnostics=tuple(self._diagnostics),
         )
 
     # --- 内部执行 ---
@@ -248,6 +276,14 @@ class AgentRuntime:
                 message=result.message,
                 attempt=attempt,
                 step_id=step.step_id,
+                kind="skill" if isinstance(step, SkillCall) else "tool",
+                raw_params=step.params,
+                output=result.data,
+                error_type=(
+                    str(result.data["exception"])
+                    if "exception" in result.data
+                    else None
+                ),
             )
             trace.append(record)
             self._remember(
@@ -316,7 +352,19 @@ class AgentRuntime:
 
     def _remember(self, kind: str, **fields: object) -> None:
         if self._memory is not None:
-            self._memory.record(kind, **fields)
+            try:
+                self._memory.record(kind, **fields)
+            except Exception as exc:  # noqa: BLE001 - 行为由显式失败策略决定
+                if self._memory_failure_policy is MemoryFailurePolicy.RAISE:
+                    raise
+                self._diagnostics.append(
+                    RuntimeDiagnostic(
+                        component="memory",
+                        stage=kind,
+                        error_type=type(exc).__name__,
+                        message=str(exc),
+                    )
+                )
 
     def _emit(self, event: RuntimeEvent) -> None:
         """向所有观察者广播事件；单个观察者异常不影响运行时与其它观察者。"""

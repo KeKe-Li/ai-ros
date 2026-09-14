@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import pytest
+
 from robot_agent.backends.ros2_backend import ROS2Backend
 from robot_agent.backends.sim_backend import SimBackend
 from robot_agent.core.task import TaskStatus
-from robot_agent.core.types import Pose, SkillResult
+from robot_agent.core.types import SkillResult
 from robot_agent.memory.memory import Memory
 from robot_agent.planning.base import Plan, Planner
 from robot_agent.planning.mock_planner import MockPlanner
-from robot_agent.runtime.agent_runtime import AgentRuntime
+from robot_agent.runtime.agent_runtime import AgentRuntime, MemoryFailurePolicy
 from robot_agent.runtime.monitor import ExecutionMonitor
 from robot_agent.runtime.task_manager import TaskManager
 from robot_agent.skills import default_skill_manager
@@ -50,11 +52,21 @@ def _runtime(backend, **kw):
     return AgentRuntime(backend, default_skill_manager(), MockPlanner(), **kw)
 
 
+@pytest.mark.parametrize("limits", [{"max_retries": -1}, {"max_replans": -1}])
+def test_runtime_rejects_negative_recovery_limits(limits):
+    grid, _ = build_pick_and_place_world()
+
+    with pytest.raises(ValueError):
+        _runtime(SimBackend(grid), **limits)
+
+
 def test_transient_exception_recovers_via_retry():
     # Arrange：grasp 首次抛异常，重试可恢复
     grid, world = build_pick_and_place_world()
     memory = Memory()
-    runtime = _runtime(_RaisingGraspBackend(grid, raise_times=1), max_retries=2, memory=memory)
+    runtime = _runtime(
+        _RaisingGraspBackend(grid, raise_times=1), max_retries=2, memory=memory
+    )
 
     # Act
     report = runtime.run(GOAL, world)
@@ -121,7 +133,11 @@ def test_postcondition_exception_is_caught():
     # 用会在后置条件抛异常的技能替换 navigate
     manager._skills["navigate"] = _BoomSkill()  # type: ignore[assignment]
     runtime = AgentRuntime(
-        _BadPostconditionBackend(grid), manager, MockPlanner(), max_retries=0, max_replans=0
+        _BadPostconditionBackend(grid),
+        manager,
+        MockPlanner(),
+        max_retries=0,
+        max_replans=0,
     )
 
     # Act：不应崩溃
@@ -248,3 +264,42 @@ def test_goal_verification_exception_returns_failed_report():
     assert "目标验证失败" in (report.task.error or "")
     assert len(report.trace) == 5
     assert recorder.events[-1].kind == "task_finished"
+
+
+def test_best_effort_memory_failure_is_reported_without_stopping_task():
+    class _BrokenMemory:
+        def record(self, kind, **fields):
+            raise OSError("memory unavailable")
+
+    grid, world = build_pick_and_place_world()
+    runtime = AgentRuntime(
+        SimBackend(grid),
+        default_skill_manager(),
+        MockPlanner(),
+        memory=_BrokenMemory(),
+    )
+
+    report = runtime.run(GOAL, world)
+
+    assert report.succeeded
+    assert report.diagnostics
+    assert report.diagnostics[0].component == "memory"
+    assert report.diagnostics[0].error_type == "OSError"
+
+
+def test_raise_memory_policy_propagates_sink_failure():
+    class _BrokenMemory:
+        def record(self, kind, **fields):
+            raise OSError("memory unavailable")
+
+    grid, world = build_pick_and_place_world()
+    runtime = AgentRuntime(
+        SimBackend(grid),
+        default_skill_manager(),
+        MockPlanner(),
+        memory=_BrokenMemory(),
+        memory_failure_policy=MemoryFailurePolicy.RAISE,
+    )
+
+    with pytest.raises(OSError, match="memory unavailable"):
+        runtime.run(GOAL, world)

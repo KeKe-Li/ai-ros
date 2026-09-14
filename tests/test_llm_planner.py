@@ -22,6 +22,9 @@ def test_offline_falls_back_to_mock_planner():
 
     # Assert：回退到规则分解，结果与 MockPlanner 一致
     assert planner.last_source == "fallback"
+    assert planner.last_diagnostic is not None
+    assert planner.last_diagnostic.source == "fallback"
+    assert planner.last_diagnostic.error_type
     expected = MockPlanner().plan(GOAL, world)
     assert [s.skill for s in plan.steps] == [s.skill for s in expected.steps]
 

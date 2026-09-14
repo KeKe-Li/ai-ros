@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from robot_agent.core.types import SkillResult
 from robot_agent.planning.goal import GoalSpec

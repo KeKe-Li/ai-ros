@@ -7,9 +7,11 @@ Planner 把自然语言/任务指令（goal）结合当前世界状态分解为�
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, TypeAlias
 
+from robot_agent.core.frozen import freeze_mapping, freeze_value
 from robot_agent.world.state import WorldState
 
 
@@ -21,15 +23,23 @@ class OutputRef:
     path: tuple[str | int, ...]
     expected: object | None = None
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "path", tuple(self.path))
+        object.__setattr__(self, "expected", freeze_value(self.expected))
+
 
 @dataclass(frozen=True)
 class SkillCall:
     """一次技能调用：技能名 + 参数 + 依赖的前序步骤下标。"""
 
     skill: str
-    params: dict[str, Any] = field(default_factory=dict)
+    params: Mapping[str, Any] = field(default_factory=dict)
     depends_on: tuple[int, ...] = ()
     step_id: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "params", freeze_mapping(self.params))
+        object.__setattr__(self, "depends_on", tuple(self.depends_on))
 
 
 @dataclass(frozen=True)
@@ -37,9 +47,13 @@ class ToolCall:
     """一次只读工具调用；工具不会改变世界状态。"""
 
     tool: str
-    params: dict[str, Any] = field(default_factory=dict)
+    params: Mapping[str, Any] = field(default_factory=dict)
     depends_on: tuple[int, ...] = ()
     step_id: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "params", freeze_mapping(self.params))
+        object.__setattr__(self, "depends_on", tuple(self.depends_on))
 
 
 PlanStep: TypeAlias = SkillCall | ToolCall

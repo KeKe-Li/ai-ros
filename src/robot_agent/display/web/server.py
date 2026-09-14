@@ -30,7 +30,11 @@ class WebMonitor:
     min_interval 用于在实时演示时放慢节奏，让浏览器看清闭环推进（默认 0 不节流）。
     """
 
-    def __init__(self, broadcaster: EventBroadcaster, min_interval: float = 0.0) -> None:
+    def __init__(
+        self, broadcaster: EventBroadcaster, min_interval: float = 0.0
+    ) -> None:
+        if min_interval < 0:
+            raise ValueError("min_interval 不能小于 0")
         self._broadcaster = broadcaster
         self._min_interval = min_interval
 
@@ -85,7 +89,7 @@ def _make_handler(broadcaster: EventBroadcaster) -> type[BaseHTTPRequestHandler]
                     try:
                         item = q.get(timeout=_SSE_POLL_SECONDS)
                         data = json.dumps(item, ensure_ascii=False)
-                        self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
+                        self.wfile.write(f"data: {data}\n\n".encode())
                     except queue.Empty:
                         self.wfile.write(b": ping\n\n")  # 心跳
                     self.wfile.flush()
@@ -106,6 +110,8 @@ class DashboardServer:
         host: str = "127.0.0.1",
         port: int = 8000,
     ) -> None:
+        if not 0 <= port <= 65535:
+            raise ValueError("port 必须在 0 到 65535 之间")
         self._httpd = ThreadingHTTPServer((host, port), _make_handler(broadcaster))
         self._httpd.daemon_threads = True
         self._thread: threading.Thread | None = None

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from robot_agent.backends.base import RobotBackend
+from robot_agent.core.capabilities import ParameterSpec
 from robot_agent.core.types import SkillResult
 from robot_agent.skills.base import Skill
 from robot_agent.world.state import WorldState
@@ -14,7 +15,9 @@ class NavigateSkill(Skill):
     """导航到目标实体（target_object）相邻位置。"""
 
     name = "navigate"
+    description = "导航到目标实体"
     required_params = ("target_object",)
+    parameters = {"target_object": ParameterSpec((str,), required=True)}
 
     def preconditions(self, world: WorldState, params: Mapping[str, object]) -> bool:
         return world.get(str(params["target_object"])) is not None

@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from robot_agent.core.errors import OutputResolutionError
+from robot_agent.core.frozen import freeze_mapping
 from robot_agent.planning.base import OutputRef
 
 
@@ -13,11 +14,11 @@ class ExecutionContext:
     """保存成功步骤的输出，并在后续步骤执行前解析参数引用。"""
 
     def __init__(self) -> None:
-        self._outputs: dict[str, dict[str, Any]] = {}
+        self._outputs: dict[str, Mapping[str, Any]] = {}
 
     def record(self, step_id: str, output: Mapping[str, Any]) -> None:
         """记录一个步骤的结构化输出。"""
-        self._outputs[step_id] = dict(output)
+        self._outputs[step_id] = freeze_mapping(output)
 
     def resolve_params(self, params: Mapping[str, Any]) -> dict[str, Any]:
         """递归解析参数中的所有 `OutputRef`。"""

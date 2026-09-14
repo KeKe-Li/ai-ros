@@ -6,10 +6,10 @@ WorldState 是流经整个 Agent 闭环的核心数据快照，采用不可变�
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from types import MappingProxyType
-from typing import Mapping
 
+from robot_agent.core.frozen import freeze_mapping
 from robot_agent.core.types import Pose
 
 
@@ -25,6 +25,10 @@ class ObjectInfo:
     is_graspable: bool = False  # 是否可被抓取（如方块）
     is_container: bool = False  # 是否可作为放置目标（如箱子）
     in_container: str | None = None  # 当前所在容器 id（放置后设置）
+    aliases: tuple[str, ...] = ()  # 自然语言别名（用于完整实体解析）
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "aliases", tuple(self.aliases))
 
 
 @dataclass(frozen=True)
@@ -35,21 +39,24 @@ class WorldState:
     holding: str | None = None
     objects: Mapping[str, ObjectInfo] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "objects", freeze_mapping(self.objects))
+
     # --- 更新语义：返回新副本 ---
 
-    def with_robot_pose(self, pose: Pose) -> "WorldState":
+    def with_robot_pose(self, pose: Pose) -> WorldState:
         """返回机器人移动到新位姿后的世界。"""
         return replace(self, robot_pose=pose)
 
-    def with_holding(self, obj_id: str | None) -> "WorldState":
+    def with_holding(self, obj_id: str | None) -> WorldState:
         """返回机器人持有物变更后的世界。"""
         return replace(self, holding=obj_id)
 
-    def with_object(self, obj_id: str, info: ObjectInfo) -> "WorldState":
+    def with_object(self, obj_id: str, info: ObjectInfo) -> WorldState:
         """返回替换/新增某实体后的世界。"""
         new_objects = dict(self.objects)
         new_objects[obj_id] = info
-        return replace(self, objects=MappingProxyType(new_objects))
+        return replace(self, objects=new_objects)
 
     # --- 查询 ---
 
@@ -79,4 +86,4 @@ class WorldState:
 
 def build_world(robot_pose: Pose, objects: Mapping[str, ObjectInfo]) -> WorldState:
     """构造初始世界的便捷函数，objects 以只读映射封装。"""
-    return WorldState(robot_pose=robot_pose, objects=MappingProxyType(dict(objects)))
+    return WorldState(robot_pose=robot_pose, objects=objects)

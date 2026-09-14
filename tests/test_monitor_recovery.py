@@ -32,7 +32,9 @@ def test_verify_goal_is_deterministic_and_planner_free():
     assert ExecutionMonitor().verify_goal(goal_spec, world) is False
 
     # 方块入箱后为 True（纯确定性判定，不触发任何规划）
-    world = world.with_object("red_cube", replace(world.get("red_cube"), in_container="box"))
+    world = world.with_object(
+        "red_cube", replace(world.get("red_cube"), in_container="box")
+    )
 
     # Act / Assert
     assert ExecutionMonitor().verify_goal(goal_spec, world) is True
@@ -74,9 +76,7 @@ def test_happy_path_no_failures_succeeds_without_replan():
 
 def test_unrecoverable_failure_marks_task_failed():
     # Arrange：grasp 持续失败，重试与重规划均无法恢复
-    runtime, world = _runtime(
-        fail_actions={"grasp": 100}, max_retries=1, max_replans=1
-    )
+    runtime, world = _runtime(fail_actions={"grasp": 100}, max_retries=1, max_replans=1)
 
     # Act
     report = runtime.run(GOAL, world)
@@ -89,9 +89,7 @@ def test_unrecoverable_failure_marks_task_failed():
 
 def test_replan_is_attempted_before_giving_up():
     # Arrange
-    runtime, world = _runtime(
-        fail_actions={"grasp": 100}, max_retries=0, max_replans=2
-    )
+    runtime, world = _runtime(fail_actions={"grasp": 100}, max_retries=0, max_replans=2)
 
     # Act
     report = runtime.run(GOAL, world)

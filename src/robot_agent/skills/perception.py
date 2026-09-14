@@ -5,9 +5,10 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from robot_agent.backends.base import RobotBackend
+from robot_agent.core.capabilities import ParameterSpec, SideEffect
 from robot_agent.core.types import SkillResult
 from robot_agent.skills.base import Skill
 from robot_agent.world.state import WorldState
@@ -17,7 +18,15 @@ class DetectObjectSkill(Skill):
     """按 color/graspable 等条件检测物体。"""
 
     name = "detect"
+    description = "检测附近符合条件的物体"
     required_params = ()
+    parameters = {
+        "object_id": ParameterSpec((str,)),
+        "color": ParameterSpec((str,)),
+        "graspable": ParameterSpec((bool,)),
+    }
+    outputs = {"object_ids": ParameterSpec((list, tuple), required=True)}
+    side_effect = SideEffect.NONE
 
     def execute(
         self,
@@ -36,7 +45,7 @@ class DetectObjectSkill(Skill):
         result: SkillResult,
     ) -> bool:
         object_ids = result.data.get("object_ids")
-        if not isinstance(object_ids, list) or not object_ids:
+        if not isinstance(object_ids, (list, tuple)) or not object_ids:
             return False
         expected = params.get("object_id")
         return expected is None or str(expected) in object_ids

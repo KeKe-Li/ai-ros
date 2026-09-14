@@ -9,9 +9,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from robot_agent.core.frozen import freeze_mapping
 from robot_agent.core.task import Task
 from robot_agent.world.state import WorldState
 
@@ -21,11 +23,30 @@ class StepRecord:
     """单步执行留痕，用于追溯与展示闭环过程。"""
 
     skill: str
-    params: dict[str, object]
+    params: Mapping[str, object]
     status: str  # "ok" | "failed"
     message: str
     attempt: int
     step_id: str = ""
+    kind: str = "skill"
+    raw_params: Mapping[str, object] = field(default_factory=dict)
+    output: Mapping[str, object] = field(default_factory=dict)
+    error_type: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "params", freeze_mapping(self.params))
+        object.__setattr__(self, "raw_params", freeze_mapping(self.raw_params))
+        object.__setattr__(self, "output", freeze_mapping(self.output))
+
+
+@dataclass(frozen=True)
+class RuntimeDiagnostic:
+    """不会包含敏感上下文的结构化运行时诊断。"""
+
+    component: str
+    stage: str
+    error_type: str
+    message: str
 
 
 @dataclass(frozen=True)

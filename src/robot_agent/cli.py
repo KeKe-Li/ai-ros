@@ -37,8 +37,10 @@ def _make_planner(name: str) -> Planner:
 
 def _print_report(report: RunReport, goal: str, verbose: bool) -> None:
     print(f"目标：{goal}")
-    print(f"任务状态：{report.task.status.value}"
-          + (f"（{report.task.error}）" if report.task.error else ""))
+    print(
+        f"任务状态：{report.task.status.value}"
+        + (f"（{report.task.error}）" if report.task.error else "")
+    )
     print(f"重规划次数：{report.replans}")
     print("执行轨迹：")
     for i, rec in enumerate(report.trace, 1):
@@ -71,7 +73,11 @@ def _cmd_demo(args: argparse.Namespace) -> int:
 
     server = None
     if args.web:
-        from robot_agent.display.web import DashboardServer, EventBroadcaster, WebMonitor
+        from robot_agent.display.web import (
+            DashboardServer,
+            EventBroadcaster,
+            WebMonitor,
+        )
 
         broadcaster = EventBroadcaster()
         server = DashboardServer(broadcaster, port=args.port)
@@ -127,9 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--web", action="store_true", help="启用 Web 图形界面上位机（浏览器查看）"
     )
     demo.add_argument("--port", type=int, default=8000, help="Web 仪表盘端口")
-    demo.add_argument(
-        "--open", action="store_true", help="自动在默认浏览器打开仪表盘"
-    )
+    demo.add_argument("--open", action="store_true", help="自动在默认浏览器打开仪表盘")
     demo.add_argument(
         "--frame-delay",
         type=float,

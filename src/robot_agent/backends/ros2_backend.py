@@ -12,7 +12,7 @@ ROS2 机制的映射关系；部署到 Linux + ROS2 时补全实现即可，上�
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from robot_agent.backends.base import RobotBackend
 from robot_agent.core.errors import BackendNotAvailableError
@@ -39,7 +39,9 @@ class ROS2Backend(RobotBackend):
     def detect(self, world: WorldState, query: Mapping[str, object]) -> SkillResult:
         raise BackendNotAvailableError(_UNAVAILABLE)
 
-    def grasp(self, world: WorldState, object_id: str) -> tuple[SkillResult, WorldState]:
+    def grasp(
+        self, world: WorldState, object_id: str
+    ) -> tuple[SkillResult, WorldState]:
         raise BackendNotAvailableError(_UNAVAILABLE)
 
     def place(

@@ -16,6 +16,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from robot_agent.core.errors import PlanningError
+from robot_agent.planning.entity_resolver import EntityResolver, contains_token
 from robot_agent.world.state import WorldState
 
 # 颜色关键词映射（中/英）
@@ -45,7 +46,7 @@ class GoalSpec(ABC):
 
 @dataclass(frozen=True)
 class InContainerGoal(GoalSpec):
-    """"把某物放入某容器"类目标。
+    """ "把某物放入某容器"类目标。
 
     object_id/container_id 在解析时结合世界一次性解析定位，之后的判定只做纯查询。
     """
@@ -87,10 +88,10 @@ def _find_container(text: str, world: WorldState) -> str:
     ]
     if not containers:
         raise PlanningError("世界中不存在可放置的容器")
-    explicit = _find_explicit_id(text, containers)
+    explicit = EntityResolver(world).resolve(text, containers, "容器")
     if explicit is not None:
         return explicit
-    if not any(kw in text for kw in _CONTAINER_KEYWORDS):
+    if not any(contains_token(text, kw) for kw in _CONTAINER_KEYWORDS):
         raise PlanningError(f"目标未描述有效的容器/放置意图：{text!r}")
     if len(containers) > 1:
         raise PlanningError(f"目标对应多个候选容器，请明确指定：{containers}")
@@ -100,26 +101,15 @@ def _find_container(text: str, world: WorldState) -> str:
 def _find_target_object(
     text: str, color: str | None, container_id: str, world: WorldState
 ) -> str:
+    all_graspable = world.find_objects(graspable=True)
+    explicit = EntityResolver(world).resolve(text, all_graspable, "物体")
+    if explicit is not None:
+        return explicit
     candidates = world.find_objects(color=color, graspable=True)
     # 排除容器自身（理论上容器不可抓取，这里稳妥起见再过滤一次）
     candidates = [c for c in candidates if c != container_id]
     if not candidates:
         raise PlanningError(f"世界中找不到匹配的可抓取物体（color={color}）")
-    explicit = _find_explicit_id(text, candidates)
-    if explicit is not None:
-        return explicit
     if len(candidates) > 1:
         raise PlanningError(f"目标对应多个候选物体，请明确指定：{candidates}")
     return candidates[0]
-
-
-def _find_explicit_id(text: str, candidates: list[str] | tuple[str, ...]) -> str | None:
-    """查找目标文本中最具体的实体 ID；同长度多匹配视为歧义。"""
-    matches = [entity_id for entity_id in candidates if entity_id.lower() in text]
-    if not matches:
-        return None
-    longest = max(len(entity_id) for entity_id in matches)
-    most_specific = [entity_id for entity_id in matches if len(entity_id) == longest]
-    if len(most_specific) > 1:
-        raise PlanningError(f"目标同时指定了多个实体：{sorted(most_specific)}")
-    return most_specific[0]

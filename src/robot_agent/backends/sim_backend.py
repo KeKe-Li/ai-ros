@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from robot_agent.backends.base import RobotBackend
 from robot_agent.core.types import Pose, SkillResult
@@ -52,7 +52,9 @@ class SimBackend(RobotBackend):
             return SkillResult.failure("未检测到匹配物体", object_ids=[])
         return SkillResult.success(f"检测到 {visible}", object_ids=visible)
 
-    def grasp(self, world: WorldState, object_id: str) -> tuple[SkillResult, WorldState]:
+    def grasp(
+        self, world: WorldState, object_id: str
+    ) -> tuple[SkillResult, WorldState]:
         obj = world.get(object_id)
         if obj is None:
             return SkillResult.failure(f"物体不存在：{object_id}"), world

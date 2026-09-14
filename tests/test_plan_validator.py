@@ -21,6 +21,11 @@ def _validator(tools: ToolRegistry | None = None):
     return PlanValidator(default_skill_manager(), tools)
 
 
+def test_validator_rejects_non_positive_max_steps():
+    with pytest.raises(ValueError, match="max_steps"):
+        PlanValidator(default_skill_manager(), max_steps=0)
+
+
 def _valid_plan() -> Plan:
     return Plan(
         GOAL,

@@ -8,37 +8,55 @@ from __future__ import annotations
 
 import queue
 import threading
+from collections import deque
 from typing import Any
 
 
 class EventBroadcaster:
     """一对多事件分发：一个生产者，多个 SSE 消费者。"""
 
-    def __init__(self, keep_history: bool = True) -> None:
+    def __init__(
+        self,
+        keep_history: bool = True,
+        history_limit: int = 1000,
+        queue_limit: int = 256,
+    ) -> None:
+        if history_limit <= 0:
+            raise ValueError("history_limit 必须大于 0")
+        if queue_limit <= 0:
+            raise ValueError("queue_limit 必须大于 0")
         self._lock = threading.Lock()
         self._subscribers: list[queue.Queue[dict[str, Any]]] = []
-        self._history: list[dict[str, Any]] = []
+        self._history: deque[dict[str, Any]] = deque(maxlen=history_limit)
         self._keep_history = keep_history
+        self._queue_limit = queue_limit
+        self._dropped_events = 0
 
     def publish(self, payload: dict[str, Any]) -> None:
         """广播一条事件到所有订阅者，并按需记入历史。"""
         with self._lock:
             if self._keep_history:
                 self._history.append(payload)
-            subscribers = list(self._subscribers)
-        for q in subscribers:
-            q.put(payload)
+            for subscriber in self._subscribers:
+                try:
+                    subscriber.put_nowait(payload)
+                except queue.Full:
+                    # 慢订阅者只保留最新状态，绝不阻塞运行时生产者。
+                    subscriber.get_nowait()
+                    subscriber.put_nowait(payload)
+                    self._dropped_events += 1
 
-    def subscribe(self) -> "queue.Queue[dict[str, Any]]":
+    def subscribe(self) -> queue.Queue[dict[str, Any]]:
         """新增一个订阅队列，并先灌入历史事件供回放。"""
-        q: "queue.Queue[dict[str, Any]]" = queue.Queue()
+        q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=self._queue_limit)
         with self._lock:
-            for item in self._history:
-                q.put(item)
+            # 历史多于订阅队列容量时回放最新窗口，避免订阅过程阻塞。
+            for item in list(self._history)[-self._queue_limit :]:
+                q.put_nowait(item)
             self._subscribers.append(q)
         return q
 
-    def unsubscribe(self, q: "queue.Queue[dict[str, Any]]") -> None:
+    def unsubscribe(self, q: queue.Queue[dict[str, Any]]) -> None:
         """移除订阅队列（连接关闭时调用）。"""
         with self._lock:
             if q in self._subscribers:
@@ -57,3 +75,8 @@ class EventBroadcaster:
     def subscriber_count(self) -> int:
         with self._lock:
             return len(self._subscribers)
+
+    def dropped_events(self) -> int:
+        """返回因订阅者消费过慢而丢弃的事件总数。"""
+        with self._lock:
+            return self._dropped_events

@@ -21,9 +21,7 @@ from typing import Protocol
 
 from robot_agent.backends.base import RobotBackend
 from robot_agent.core.task import Task, TaskStatus
-from robot_agent.core.types import SkillResult
-from robot_agent.planning.base import Planner, PlanStep, SkillCall, ToolCall
-from robot_agent.planning.goal import parse_goal
+from robot_agent.planning.base import Planner
 from robot_agent.planning.validator import PlanValidator
 from robot_agent.runtime.context import ExecutionContext
 from robot_agent.runtime.events import (
@@ -32,7 +30,10 @@ from robot_agent.runtime.events import (
     RuntimeObserver,
     StepRecord,
 )
+from robot_agent.runtime.hooks import RuntimeHooks
 from robot_agent.runtime.monitor import ExecutionMonitor
+from robot_agent.runtime.planner_pipeline import RuntimePlanner
+from robot_agent.runtime.step_executor import StepExecutor, step_name_for
 from robot_agent.runtime.task_manager import TaskManager
 from robot_agent.skills.manager import SkillManager
 from robot_agent.tools.registry import ToolRegistry
@@ -90,75 +91,68 @@ class AgentRuntime:
             raise ValueError("max_retries 不能小于 0")
         if max_replans < 0:
             raise ValueError("max_replans 不能小于 0")
-        self._backend = backend
-        self._skills = skill_manager
-        self._planner = planner
-        self._task_manager = task_manager or TaskManager()
         self._monitor = monitor or ExecutionMonitor()
-        self._tools = tools
-        self._plan_validator = plan_validator or PlanValidator(skill_manager, tools)
-        self._memory = memory
-        self._memory_failure_policy = memory_failure_policy
-        self._diagnostics: list[RuntimeDiagnostic] = []
-        self._observers = tuple(observers or ())
-        self._max_retries = max_retries
+        self._hooks = RuntimeHooks(
+            memory=memory,
+            memory_failure_policy=memory_failure_policy,
+            observers=observers,
+        )
+        self._runtime_planner = RuntimePlanner(
+            planner=planner,
+            skills=skill_manager,
+            tools=tools,
+            task_manager=task_manager,
+            plan_validator=plan_validator,
+        )
+        self._step_executor = StepExecutor(
+            backend=backend,
+            skills=skill_manager,
+            hooks=self._hooks,
+            monitor=self._monitor,
+            tools=tools,
+            max_retries=max_retries,
+        )
         self._max_replans = max_replans
 
     def run(self, goal: str, world: WorldState) -> RunReport:
         """执行一个目标，返回运行报告。"""
-        self._diagnostics = []
+        self._hooks.reset()
         task = Task(goal).to(TaskStatus.RUNNING)
-        self._remember("task_started", goal=goal)
-        self._emit(RuntimeEvent("task_started", world=world, goal=goal, task=task))
+        self._hooks.remember("task_started", goal=goal)
+        self._hooks.emit(
+            RuntimeEvent("task_started", world=world, goal=goal, task=task)
+        )
         trace: list[StepRecord] = []
         replans = 0
 
-        # 目标解析一次得到确定性判据；验证与规划从此解耦。
         try:
-            goal_spec = parse_goal(goal, world)
+            prepared = self._runtime_planner.prepare(goal, world)
+            goal_spec = prepared.goal_spec
+            steps = prepared.steps
         except Exception as exc:  # noqa: BLE001 - 运行时边界统一转换为失败报告
-            return self._failure_report(
-                task, world, trace, replans, goal, "目标解析失败", exc
-            )
-
-        try:
-            plan = self._planner.plan(goal, world)
-        except Exception as exc:  # noqa: BLE001 - 规划器属于可替换的外部边界
-            return self._failure_report(
-                task, world, trace, replans, goal, "规划失败", exc
-            )
+            stage = _planning_stage(exc)
+            return self._failure_report(task, world, trace, replans, goal, stage, exc)
 
         while True:
-            try:
-                self._plan_validator.validate(plan, goal_spec, world)
-            except Exception as exc:  # noqa: BLE001 - 无效计划不得进入调度或执行
-                return self._failure_report(
-                    task, world, trace, replans, goal, "计划验证失败", exc
-                )
-            try:
-                steps = self._task_manager.schedule(plan)
-            except Exception as exc:  # noqa: BLE001 - 调度失败必须形成任务终态
-                return self._failure_report(
-                    task, world, trace, replans, goal, "调度失败", exc
-                )
             context = ExecutionContext()
-            world, failed = self._execute(steps, world, trace, goal, context)
+            world, failed = self._step_executor.execute(
+                steps, world, trace, goal, context
+            )
             if failed is None:
-                break  # 所有步骤达标
-            # 单步在重试后仍失败 → 尝试重规划
+                break
             if replans >= self._max_replans:
-                failed_name = _step_name(failed)
+                failed_name = step_name_for(failed)
                 task = task.to(
                     TaskStatus.FAILED,
                     error=f"步骤失败且超出重规划上限：{failed_name}",
                 )
-                self._remember("task_failed", reason=task.error)
+                self._hooks.remember("task_failed", reason=task.error)
                 break
             replans += 1
             task = task.to(TaskStatus.RECOVERING)
-            failed_name = _step_name(failed)
-            self._remember("replan", attempt=replans, after_skill=failed_name)
-            self._emit(
+            failed_name = step_name_for(failed)
+            self._hooks.remember("replan", attempt=replans, after_skill=failed_name)
+            self._hooks.emit(
                 RuntimeEvent(
                     "replan",
                     world=world,
@@ -169,14 +163,17 @@ class AgentRuntime:
                 )
             )
             try:
-                plan = self._planner.plan(goal, world)
+                prepared = self._runtime_planner.prepare(
+                    goal, world, goal_spec=goal_spec
+                )
+                steps = prepared.steps
             except Exception as exc:  # noqa: BLE001 - 重规划失败必须形成任务终态
                 return self._failure_report(
                     task, world, trace, replans, goal, "重规划失败", exc
                 )
             task = task.to(TaskStatus.RUNNING)
-            if plan.is_empty:
-                break  # 重规划发现目标已达成
+            if not steps:
+                break
 
         if not task.is_terminal:
             try:
@@ -187,12 +184,12 @@ class AgentRuntime:
                 )
             if goal_satisfied:
                 task = task.to(TaskStatus.SUCCEEDED)
-                self._remember("task_succeeded", goal=goal)
+                self._hooks.remember("task_succeeded", goal=goal)
             else:
                 task = task.to(TaskStatus.FAILED, error="目标未达成")
-                self._remember("task_failed", reason=task.error)
+                self._hooks.remember("task_failed", reason=task.error)
 
-        self._emit(
+        self._hooks.emit(
             RuntimeEvent(
                 "task_finished", world=world, goal=goal, task=task, replans=replans
             )
@@ -202,7 +199,7 @@ class AgentRuntime:
             world=world,
             trace=tuple(trace),
             replans=replans,
-            diagnostics=tuple(self._diagnostics),
+            diagnostics=self._hooks.diagnostics,
         )
 
     def _failure_report(
@@ -218,8 +215,8 @@ class AgentRuntime:
         """把阶段异常收敛为可观测的失败终态。"""
         error = f"{stage}（{type(exc).__name__}）：{exc}"
         failed_task = task.to(TaskStatus.FAILED, error=error)
-        self._remember("task_failed", reason=error, stage=stage)
-        self._emit(
+        self._hooks.remember("task_failed", reason=error, stage=stage)
+        self._hooks.emit(
             RuntimeEvent(
                 "task_finished",
                 world=world,
@@ -234,149 +231,21 @@ class AgentRuntime:
             world=world,
             trace=tuple(trace),
             replans=replans,
-            diagnostics=tuple(self._diagnostics),
+            diagnostics=self._hooks.diagnostics,
         )
 
-    # --- 内部执行 ---
 
-    def _execute(
-        self,
-        steps: list[PlanStep],
-        world: WorldState,
-        trace: list[StepRecord],
-        goal: str,
-        context: ExecutionContext,
-    ) -> tuple[WorldState, PlanStep | None]:
-        """顺序执行步骤，返回 (最新世界, 失败步骤或 None)。"""
-        for step in steps:
-            world, ok = self._run_with_retry(step, world, trace, goal, context)
-            if not ok:
-                return world, step
-        return world, None
-
-    def _run_with_retry(
-        self,
-        step: PlanStep,
-        world: WorldState,
-        trace: list[StepRecord],
-        goal: str,
-        context: ExecutionContext,
-    ) -> tuple[WorldState, bool]:
-        """执行单步，失败则原地重试至上限。"""
-        attempt = 0
-        while True:
-            result, new_world, passed, resolved_params = self._try_step(
-                step, world, context
-            )
-            step_name = _step_name(step)
-            record = StepRecord(
-                skill=step_name,
-                params=resolved_params,
-                status="ok" if passed else "failed",
-                message=result.message,
-                attempt=attempt,
-                step_id=step.step_id,
-                kind="skill" if isinstance(step, SkillCall) else "tool",
-                raw_params=step.params,
-                output=result.data,
-                error_type=(
-                    str(result.data["exception"])
-                    if "exception" in result.data
-                    else None
-                ),
-            )
-            trace.append(record)
-            self._remember(
-                "step",
-                skill=step_name,
-                passed=passed,
-                message=result.message,
-                attempt=attempt,
-            )
-            # 异常单独留痕，便于问题定位
-            if "exception" in result.data:
-                self._remember(
-                    "exception", skill=step_name, error=result.message, attempt=attempt
-                )
-            # 实时发出步骤事件，携带结果后的世界供上位机渲染
-            self._emit(
-                RuntimeEvent(
-                    "step_result",
-                    world=new_world if passed else world,
-                    goal=goal,
-                    step=record,
-                )
-            )
-            if passed:
-                context.record(step.step_id, result.data)
-                return new_world, True
-            attempt += 1
-            if attempt > self._max_retries:
-                return world, False  # 保持失败前的世界，交由重规划处理
-
-    def _try_step(
-        self, step: PlanStep, world: WorldState, context: ExecutionContext
-    ) -> tuple[SkillResult, WorldState, bool, dict[str, object]]:
-        """执行并判定单步；捕获一切异常转为失败，绝不向上抛。
-
-        Returns:
-            (结果, 新世界, 是否达标)。异常时世界保持不变、达标为 False。
-        """
-        resolved_params: dict[str, object] = {}
-        try:
-            resolved_params = context.resolve_params(step.params)
-            if isinstance(step, SkillCall):
-                result, new_world = self._skills.invoke(
-                    step.skill, self._backend, world, resolved_params
-                )
-                skill = self._skills.get(step.skill)
-                passed = self._monitor.check(
-                    result, skill, world, new_world, resolved_params
-                )
-            elif isinstance(step, ToolCall):
-                if self._tools is None:
-                    raise RuntimeError("运行时未配置工具注册表")
-                value = self._tools.call(step.tool, world, **resolved_params)
-                result = SkillResult.success(f"工具调用成功：{step.tool}", value=value)
-                new_world = world
-                passed = True
-            else:
-                raise TypeError(f"不支持的步骤类型：{type(step).__name__}")
-            return result, new_world, passed, resolved_params
-        except Exception as exc:  # noqa: BLE001 - 刻意兜底，保证运行时不被异常终止
-            failure = SkillResult.failure(
-                f"执行异常（{type(exc).__name__}）：{exc}",
-                exception=type(exc).__name__,
-            )
-            return failure, world, False, resolved_params
-
-    def _remember(self, kind: str, **fields: object) -> None:
-        if self._memory is not None:
-            try:
-                self._memory.record(kind, **fields)
-            except Exception as exc:  # noqa: BLE001 - 行为由显式失败策略决定
-                if self._memory_failure_policy is MemoryFailurePolicy.RAISE:
-                    raise
-                self._diagnostics.append(
-                    RuntimeDiagnostic(
-                        component="memory",
-                        stage=kind,
-                        error_type=type(exc).__name__,
-                        message=str(exc),
-                    )
-                )
-
-    def _emit(self, event: RuntimeEvent) -> None:
-        """向所有观察者广播事件；单个观察者异常不影响运行时与其它观察者。"""
-        for observer in self._observers:
-            try:
-                observer.on_event(event)
-            except Exception:  # noqa: BLE001 - 显示端故障不得拖垮机器人运行
-                pass
-
-
-def _step_name(step: PlanStep) -> str:
-    """返回适合轨迹与诊断展示的步骤名称。"""
-    if isinstance(step, SkillCall):
-        return step.skill
-    return f"tool:{step.tool}"
+def _planning_stage(exc: Exception) -> str:
+    message = str(exc)
+    if "调度" in message or "非法依赖" in message or "循环依赖" in message:
+        return "调度失败"
+    if (
+        "计划" in message
+        or "步骤" in message
+        or "未注册的工具" in message
+        or "未注册的技能" in message
+    ):
+        return "计划验证失败"
+    if "目标" in message or "世界" in message:
+        return "目标解析失败"
+    return "规划失败"

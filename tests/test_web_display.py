@@ -149,6 +149,24 @@ def test_web_monitor_rejects_negative_interval():
         WebMonitor(EventBroadcaster(), min_interval=-0.1)
 
 
+def test_web_monitor_min_interval_does_not_block_on_event():
+    import time
+
+    bus = EventBroadcaster()
+    monitor = WebMonitor(bus, min_interval=0.2)
+
+    start = time.perf_counter()
+    monitor.on_event(_sample_event())
+    elapsed = time.perf_counter() - start
+
+    deadline = time.perf_counter() + 1.0
+    while not bus.history() and time.perf_counter() < deadline:
+        time.sleep(0.01)
+
+    assert elapsed < 0.1
+    assert bus.history()
+
+
 def _serve(bus):
     server = DashboardServer(bus, port=0)  # 0 = 由系统分配空闲端口
     server.start()

@@ -37,10 +37,23 @@ class WebMonitor:
             raise ValueError("min_interval 不能小于 0")
         self._broadcaster = broadcaster
         self._min_interval = min_interval
+        self._pending: queue.SimpleQueue[dict[str, object]] | None = None
+        if min_interval > 0:
+            self._pending = queue.SimpleQueue()
+            threading.Thread(target=self._publish_loop, daemon=True).start()
 
     def on_event(self, event: RuntimeEvent) -> None:
-        self._broadcaster.publish(event_to_dict(event))
-        if self._min_interval > 0:
+        payload = event_to_dict(event)
+        if self._pending is None:
+            self._broadcaster.publish(payload)
+            return
+        self._pending.put(payload)
+
+    def _publish_loop(self) -> None:
+        assert self._pending is not None
+        while True:
+            payload = self._pending.get()
+            self._broadcaster.publish(payload)
             time.sleep(self._min_interval)
 
 
@@ -110,25 +123,34 @@ class DashboardServer:
         host: str = "127.0.0.1",
         port: int = 8000,
     ) -> None:
-        if not 0 <= port <= 65535:
-            raise ValueError("port 必须在 0 到 65535 之间")
-        self._httpd = ThreadingHTTPServer((host, port), _make_handler(broadcaster))
-        self._httpd.daemon_threads = True
+        if port < 0 or port > 65535:
+            raise ValueError("port 必须在 0..65535 范围内")
+        self._host = host
+        self._port = port
+        self._broadcaster = broadcaster
+        self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
     @property
-    def address(self) -> tuple[str, int]:
-        return self._httpd.server_address  # type: ignore[return-value]
-
-    @property
     def url(self) -> str:
-        host, port = self.address
+        assert self._server is not None
+        host, port = self._server.server_address
         return f"http://{host}:{port}/"
 
     def start(self) -> None:
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        if self._server is not None:
+            return
+        handler = _make_handler(self._broadcaster)
+        self._server = ThreadingHTTPServer((self._host, self._port), handler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
-        self._httpd.shutdown()
-        self._httpd.server_close()
+        if self._server is None:
+            return
+        self._server.shutdown()
+        self._server.server_close()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+        self._server = None
+        self._thread = None

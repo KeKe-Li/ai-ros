@@ -38,7 +38,7 @@ def test_parse_plan_from_valid_json():
         '{"id":"grasp_object","skill":"grasp",'
         '"params":{"object_id":{"$ref":{"step_id":"detect_object",'
         '"path":["object_ids",0],"expected":"red_cube"}}},'
-        '"depends_on":[0]}]}'
+        '"depends_on":["navigate_object"]}]}'
     )
 
     # Act
@@ -46,7 +46,7 @@ def test_parse_plan_from_valid_json():
 
     # Assert
     assert [s.skill for s in plan.steps] == ["navigate", "grasp"]
-    assert plan.steps[1].depends_on == (0,)
+    assert plan.steps[1].depends_on == ("navigate_object",)
     assert plan.steps[0].step_id == "navigate_object"
     assert plan.steps[1].params["object_id"] == OutputRef(
         "detect_object", path=("object_ids", 0), expected="red_cube"
@@ -78,7 +78,7 @@ def test_parse_plan_preserves_non_string_expected_value():
         '{"steps":[{"id":"locate","tool":"count_objects","params":{}},'
         '{"id":"use_count","tool":"count_objects","params":{"color":'
         '{"$ref":{"step_id":"locate","path":["value"],"expected":3}}},'
-        '"depends_on":[0]}]}'
+        '"depends_on":["locate"]}]}'
     )
 
     plan = LLMPlanner._parse_plan(GOAL, text)

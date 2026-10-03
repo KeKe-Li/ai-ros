@@ -1,7 +1,8 @@
 """规划器接口与计划数据模型。
 
 Planner 把自然语言/任务指令（goal）结合当前世界状态分解为一串技能调用（Plan）。
-计划为不可变数据：每个 SkillCall 通过 depends_on 声明对前序步骤的依赖，供调度器排序。
+计划为不可变数据：每个 SkillCall 通过 depends_on 声明对前序步骤 `step_id` 的依赖，
+供调度器排序。
 """
 
 from __future__ import annotations
@@ -30,16 +31,18 @@ class OutputRef:
 
 @dataclass(frozen=True)
 class SkillCall:
-    """一次技能调用：技能名 + 参数 + 依赖的前序步骤下标。"""
+    """一次技能调用：技能名 + 参数 + 依赖的前序步骤 step_id。"""
 
     skill: str
     params: Mapping[str, Any] = field(default_factory=dict)
-    depends_on: tuple[int, ...] = ()
+    depends_on: tuple[str, ...] = ()
     step_id: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "params", freeze_mapping(self.params))
-        object.__setattr__(self, "depends_on", tuple(self.depends_on))
+        object.__setattr__(
+            self, "depends_on", tuple(str(item) for item in self.depends_on)
+        )
 
 
 @dataclass(frozen=True)
@@ -48,12 +51,14 @@ class ToolCall:
 
     tool: str
     params: Mapping[str, Any] = field(default_factory=dict)
-    depends_on: tuple[int, ...] = ()
+    depends_on: tuple[str, ...] = ()
     step_id: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "params", freeze_mapping(self.params))
-        object.__setattr__(self, "depends_on", tuple(self.depends_on))
+        object.__setattr__(
+            self, "depends_on", tuple(str(item) for item in self.depends_on)
+        )
 
 
 PlanStep: TypeAlias = SkillCall | ToolCall

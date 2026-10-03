@@ -48,10 +48,10 @@ def test_plan_steps_have_linear_dependencies():
     # Act
     plan = MockPlanner().plan("把红色方块放到箱子里", world)
 
-    # Assert：每步依赖前一步
+    # Assert：每步依赖前一步的 step_id
     assert plan.steps[0].depends_on == ()
     for i in range(1, len(plan.steps)):
-        assert plan.steps[i].depends_on == (i - 1,)
+        assert plan.steps[i].depends_on == (plan.steps[i - 1].step_id,)
 
 
 def test_replan_when_already_holding_skips_pick_steps():

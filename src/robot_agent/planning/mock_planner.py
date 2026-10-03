@@ -22,7 +22,6 @@ class MockPlanner(Planner):
         spec = parse_goal(goal, world)
         assert isinstance(spec, InContainerGoal)  # 当前仅支持该目标类型
 
-        # 目标已达成：物体已在容器内
         if spec.is_satisfied(world):
             return Plan(goal=goal, steps=())
 
@@ -31,7 +30,6 @@ class MockPlanner(Planner):
         color = spec.color
         steps: list[SkillCall] = []
 
-        # 若尚未持有目标物，则需要 导航->检测->抓取
         if world.holding != object_id:
             target_pose = world.objects[object_id].pose
             if world.robot_pose != target_pose:
@@ -74,7 +72,6 @@ class MockPlanner(Planner):
                 )
             )
 
-        # 导航到容器并放置
         steps.append(
             _linked(
                 steps,
@@ -100,12 +97,12 @@ class MockPlanner(Planner):
 
 
 def _linked(existing: list[SkillCall], call: SkillCall) -> SkillCall:
-    """把 call 线性链接到已有步骤末尾：依赖上一步（若存在）。"""
+    """把 call 线性链接到已有步骤末尾：依赖上一步的 step_id（若存在）。"""
     if not existing:
         return call
     return SkillCall(
         call.skill,
         call.params,
-        depends_on=(len(existing) - 1,),
+        depends_on=(existing[-1].step_id,),
         step_id=call.step_id,
     )

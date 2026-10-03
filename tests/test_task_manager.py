@@ -15,9 +15,9 @@ def test_schedule_linear_plan_preserves_order():
     plan = Plan(
         goal="g",
         steps=(
-            SkillCall("a"),
-            SkillCall("b", depends_on=(0,)),
-            SkillCall("c", depends_on=(1,)),
+            SkillCall("a", step_id="step_a"),
+            SkillCall("b", depends_on=("step_a",), step_id="step_b"),
+            SkillCall("c", depends_on=("step_b",), step_id="step_c"),
         ),
     )
 
@@ -30,7 +30,14 @@ def test_schedule_linear_plan_preserves_order():
 
 def test_schedule_independent_steps_ordered_by_index():
     # Arrange：无依赖的步骤按下标稳定排序
-    plan = Plan(goal="g", steps=(SkillCall("x"), SkillCall("y"), SkillCall("z")))
+    plan = Plan(
+        goal="g",
+        steps=(
+            SkillCall("x", step_id="step_x"),
+            SkillCall("y", step_id="step_y"),
+            SkillCall("z", step_id="step_z"),
+        ),
+    )
 
     # Act
     order = TaskManager().schedule(plan)
@@ -43,7 +50,10 @@ def test_schedule_detects_cycle():
     # Arrange：0->1->0 循环
     plan = Plan(
         goal="g",
-        steps=(SkillCall("a", depends_on=(1,)), SkillCall("b", depends_on=(0,))),
+        steps=(
+            SkillCall("a", depends_on=("step_b",), step_id="step_a"),
+            SkillCall("b", depends_on=("step_a",), step_id="step_b"),
+        ),
     )
 
     # Act / Assert
@@ -53,7 +63,10 @@ def test_schedule_detects_cycle():
 
 def test_schedule_rejects_illegal_dependency():
     # Arrange：依赖越界
-    plan = Plan(goal="g", steps=(SkillCall("a", depends_on=(5,)),))
+    plan = Plan(
+        goal="g",
+        steps=(SkillCall("a", depends_on=("missing_step",), step_id="step_a"),),
+    )
 
     # Act / Assert
     with pytest.raises(SchedulingError):

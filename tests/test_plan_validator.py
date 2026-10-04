@@ -44,19 +44,19 @@ def _valid_plan() -> Plan:
                         expected="red_cube",
                     )
                 },
-                depends_on=(0,),
+                depends_on=("detect_object",),
                 step_id="grasp_object",
             ),
             SkillCall(
                 "navigate",
                 {"target_object": "box"},
-                depends_on=(1,),
+                depends_on=("grasp_object",),
                 step_id="navigate_container",
             ),
             SkillCall(
                 "place",
                 {"container_id": "box"},
-                depends_on=(2,),
+                depends_on=("navigate_container",),
                 step_id="place_object",
             ),
         ),
@@ -112,7 +112,7 @@ def test_validator_accepts_goal_aligned_plan_with_output_reference():
                                 expected="blue_cube",
                             )
                         },
-                        depends_on=(0,),
+                        depends_on=("detect",),
                         step_id="grasp",
                     ),
                 ),

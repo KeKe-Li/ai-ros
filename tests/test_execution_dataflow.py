@@ -61,7 +61,7 @@ def test_tool_output_can_drive_later_skill_parameter():
                     ),
                     ToolCall(
                         "select_target",
-                        depends_on=(0,),
+                        depends_on=("navigate_object",),
                         step_id="select_target",
                     ),
                     SkillCall(
@@ -73,19 +73,19 @@ def test_tool_output_can_drive_later_skill_parameter():
                                 expected="red_cube",
                             )
                         },
-                        depends_on=(1,),
+                        depends_on=("select_target",),
                         step_id="grasp_object",
                     ),
                     SkillCall(
                         "navigate",
                         {"target_object": "box"},
-                        depends_on=(2,),
+                        depends_on=("grasp_object",),
                         step_id="navigate_container",
                     ),
                     SkillCall(
                         "place",
                         {"container_id": "box"},
-                        depends_on=(3,),
+                        depends_on=("navigate_container",),
                         step_id="place_object",
                     ),
                 ),

@@ -33,7 +33,7 @@ _SYSTEM_PREFIX = (
     '"params":{"object_id":"red_cube"},"depends_on":[]},'
     '{"id":"grasp_object","skill":"grasp","params":{"object_id":'
     '{"$ref":{"step_id":"detect_object","path":["object_ids",0],'
-    '"expected":"red_cube"}}},"depends_on":[0]}]}。'
+    '"expected":"red_cube"}}},"depends_on":["detect_object"]}]}。'
     "只读工具步骤使用 tool 字段。不要输出解释。"
 )
 
@@ -146,7 +146,7 @@ class LLMPlanner(Planner):
             params = _decode_value(raw.get("params", {}))
             if not isinstance(params, dict):
                 raise ValueError(f"LLM 计划步骤 {step_id} 的 params 必须是对象")
-            depends_on = tuple(int(d) for d in raw.get("depends_on", []))
+            depends_on = tuple(str(d) for d in raw.get("depends_on", []))
             if "skill" in raw and "tool" not in raw:
                 skill = str(raw["skill"])
                 if skill not in allowed_skills:

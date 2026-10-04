@@ -18,31 +18,35 @@ class TaskManager:
         """把计划展开为可顺序执行的步骤列表。
 
         使用 Kahn 算法做拓扑排序；发现非法依赖或循环依赖时抛 SchedulingError。
-        同层就绪节点按下标升序出队，保证结果确定可复现。
+        同层就绪节点按原始下标升序出队，保证结果确定可复现。
         """
         steps = plan.steps
-        n = len(steps)
-        indegree = [0] * n
-        adjacency: list[list[int]] = [[] for _ in range(n)]
+        size = len(steps)
+        indegree = [0] * size
+        adjacency: list[list[int]] = [[] for _ in range(size)]
+        id_to_index = {step.step_id: index for index, step in enumerate(steps)}
 
-        for i, step in enumerate(steps):
-            for dep in step.depends_on:
-                if dep < 0 or dep >= n or dep == i:
-                    raise SchedulingError(f"步骤 {i} 存在非法依赖：{dep}")
-                adjacency[dep].append(i)
-                indegree[i] += 1
+        for index, step in enumerate(steps):
+            for dependency in step.depends_on:
+                source_index = id_to_index.get(dependency)
+                if source_index is None or source_index == index:
+                    raise SchedulingError(
+                        f"步骤 {step.step_id} 存在非法依赖：{dependency}"
+                    )
+                adjacency[source_index].append(index)
+                indegree[index] += 1
 
-        ready = sorted(idx for idx in range(n) if indegree[idx] == 0)
+        ready = sorted(index for index, degree in enumerate(indegree) if degree == 0)
         order: list[int] = []
         while ready:
             node = ready.pop(0)
             order.append(node)
-            for nxt in adjacency[node]:
-                indegree[nxt] -= 1
-                if indegree[nxt] == 0:
-                    ready.append(nxt)
+            for following in adjacency[node]:
+                indegree[following] -= 1
+                if indegree[following] == 0:
+                    ready.append(following)
             ready.sort()
 
-        if len(order) != n:
+        if len(order) != size:
             raise SchedulingError("计划存在循环依赖，无法调度")
-        return [steps[i] for i in order]
+        return [steps[index] for index in order]

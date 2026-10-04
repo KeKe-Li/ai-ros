@@ -47,7 +47,7 @@ class PlanValidator:
             raise PlanningError("计划中存在重复 step_id")
 
         id_to_index = {step_id: index for index, step_id in enumerate(step_ids)}
-        self._validate_dependencies(plan)
+        self._validate_dependencies(plan, id_to_index)
         for index, step in enumerate(plan.steps):
             if not isinstance(step.params, Mapping):
                 raise PlanningError(f"步骤 {step.step_id} 的 params 必须是映射")
@@ -60,17 +60,18 @@ class PlanValidator:
                 raise PlanningError(f"不支持的计划步骤类型：{type(step).__name__}")
 
     @staticmethod
-    def _validate_dependencies(plan: Plan) -> None:
+    def _validate_dependencies(plan: Plan, id_to_index: dict[str, int]) -> None:
         size = len(plan.steps)
         indegree = [0] * size
         adjacency: list[list[int]] = [[] for _ in range(size)]
         for index, step in enumerate(plan.steps):
             for dependency in step.depends_on:
-                if dependency < 0 or dependency >= size or dependency == index:
+                source_index = id_to_index.get(dependency)
+                if source_index is None or source_index == index:
                     raise PlanningError(
                         f"步骤 {step.step_id} 存在非法依赖：{dependency}"
                     )
-                adjacency[dependency].append(index)
+                adjacency[source_index].append(index)
                 indegree[index] += 1
 
         ready = [index for index, degree in enumerate(indegree) if degree == 0]
@@ -98,7 +99,7 @@ class PlanValidator:
                 raise PlanningError(
                     f"步骤 {step.step_id} 只能引用更早步骤的输出：{ref.step_id}"
                 )
-            if source_index not in step.depends_on:
+            if ref.step_id not in step.depends_on:
                 raise PlanningError(
                     f"步骤 {step.step_id} 引用了 {ref.step_id}，但未声明直接依赖"
                 )

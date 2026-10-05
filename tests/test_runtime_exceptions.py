@@ -303,3 +303,42 @@ def test_raise_memory_policy_propagates_sink_failure():
 
     with pytest.raises(OSError, match="memory unavailable"):
         runtime.run(GOAL, world)
+
+
+def test_runtime_planner_exposes_structured_stage_for_goal_parse_failure():
+    from robot_agent.runtime.planner_pipeline import (
+        PlanningStageFailure,
+        RuntimePlanner,
+    )
+
+    grid, world = build_pick_and_place_world()
+    planner = RuntimePlanner(planner=MockPlanner(), skills=default_skill_manager())
+
+    with pytest.raises(PlanningStageFailure, match="目标解析失败") as exc_info:
+        planner.prepare("捡起红色方块", world)
+
+    assert exc_info.value.stage == "目标解析失败"
+
+
+def test_runtime_planner_exposes_structured_stage_for_scheduling_failure():
+    from robot_agent.runtime.planner_pipeline import (
+        PlanningStageFailure,
+        RuntimePlanner,
+    )
+
+    grid, world = build_pick_and_place_world()
+
+    class _RaisingTaskManager(TaskManager):
+        def schedule(self, plan: Plan):
+            raise RuntimeError("模拟调度器异常")
+
+    planner = RuntimePlanner(
+        planner=MockPlanner(),
+        skills=default_skill_manager(),
+        task_manager=_RaisingTaskManager(),
+    )
+
+    with pytest.raises(PlanningStageFailure, match="调度失败") as exc_info:
+        planner.prepare(GOAL, world)
+
+    assert exc_info.value.stage == "调度失败"

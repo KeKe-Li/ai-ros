@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from robot_agent.core.errors import SchedulingError
 from robot_agent.planning.base import Plan, PlanStep
+from robot_agent.planning.dependency_graph import topological_order
 
 
 class TaskManager:
@@ -20,33 +21,9 @@ class TaskManager:
         使用 Kahn 算法做拓扑排序；发现非法依赖或循环依赖时抛 SchedulingError。
         同层就绪节点按原始下标升序出队，保证结果确定可复现。
         """
-        steps = plan.steps
-        size = len(steps)
-        indegree = [0] * size
-        adjacency: list[list[int]] = [[] for _ in range(size)]
-        id_to_index = {step.step_id: index for index, step in enumerate(steps)}
+        order = topological_order(plan.steps, _dependency_error)
+        return [plan.steps[index] for index in order]
 
-        for index, step in enumerate(steps):
-            for dependency in step.depends_on:
-                source_index = id_to_index.get(dependency)
-                if source_index is None or source_index == index:
-                    raise SchedulingError(
-                        f"步骤 {step.step_id} 存在非法依赖：{dependency}"
-                    )
-                adjacency[source_index].append(index)
-                indegree[index] += 1
 
-        ready = sorted(index for index, degree in enumerate(indegree) if degree == 0)
-        order: list[int] = []
-        while ready:
-            node = ready.pop(0)
-            order.append(node)
-            for following in adjacency[node]:
-                indegree[following] -= 1
-                if indegree[following] == 0:
-                    ready.append(following)
-            ready.sort()
-
-        if len(order) != size:
-            raise SchedulingError("计划存在循环依赖，无法调度")
-        return [steps[index] for index in order]
+def _dependency_error(step_id: str, dependency: str) -> SchedulingError:
+    return SchedulingError(f"步骤 {step_id} 存在非法依赖：{dependency}")

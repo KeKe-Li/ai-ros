@@ -32,3 +32,12 @@ class OutputResolutionError(RobotAgentError):
 
 class MemoryCorruptionError(RobotAgentError):
     """长期记忆文件损坏或根结构不合法。"""
+
+
+class PlanningStageFailure(PlanningError):
+    """规划准备流水线在明确阶段失败。"""
+
+    def __init__(self, stage: str, cause: Exception):
+        self.stage = stage
+        self.cause = cause
+        super().__init__(f"{stage}（{type(cause).__name__}）：{cause}")

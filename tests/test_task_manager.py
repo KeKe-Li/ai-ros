@@ -105,3 +105,13 @@ def test_task_recovering_cycle_allowed():
 
     # Assert
     assert back.status is TaskStatus.RUNNING
+
+
+def test_schedule_rejects_self_dependency_by_step_id():
+    plan = Plan(
+        goal="g",
+        steps=(SkillCall("a", depends_on=("step_a",), step_id="step_a"),),
+    )
+
+    with pytest.raises(SchedulingError, match="非法依赖"):
+        TaskManager().schedule(plan)

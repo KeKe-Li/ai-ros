@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from robot_agent.core.errors import PlanningStageFailure
 from robot_agent.planning.base import Planner, PlanStep
 from robot_agent.planning.goal import GoalSpec, parse_goal
 from robot_agent.planning.validator import PlanValidator
@@ -40,8 +41,24 @@ class RuntimePlanner:
     def prepare(
         self, goal: str, world: WorldState, goal_spec: GoalSpec | None = None
     ) -> PreparedPlan:
-        resolved_goal = goal_spec or parse_goal(goal, world)
-        plan = self._planner.plan(goal, world)
-        self._plan_validator.validate(plan, resolved_goal, world)
-        steps = self._task_manager.schedule(plan)
+        try:
+            resolved_goal = goal_spec or parse_goal(goal, world)
+        except Exception as exc:  # noqa: BLE001 - 统一包装为带阶段语义的异常
+            raise PlanningStageFailure("目标解析失败", exc) from exc
+
+        try:
+            plan = self._planner.plan(goal, world)
+        except Exception as exc:  # noqa: BLE001 - 规划器属于可替换外部边界
+            raise PlanningStageFailure("规划失败", exc) from exc
+
+        try:
+            self._plan_validator.validate(plan, resolved_goal, world)
+        except Exception as exc:  # noqa: BLE001 - 无效计划不得进入调度阶段
+            raise PlanningStageFailure("计划验证失败", exc) from exc
+
+        try:
+            steps = self._task_manager.schedule(plan)
+        except Exception as exc:  # noqa: BLE001 - 调度失败必须有明确阶段归因
+            raise PlanningStageFailure("调度失败", exc) from exc
+
         return PreparedPlan(goal_spec=resolved_goal, steps=steps)

@@ -52,8 +52,15 @@ class RuntimeHooks:
         for observer in self._observers:
             try:
                 observer.on_event(event)
-            except Exception:  # noqa: BLE001 - 显示端故障不得拖垮机器人运行
-                pass
+            except Exception as exc:  # noqa: BLE001 - 显示端故障不得拖垮机器人运行
+                self._diagnostics.append(
+                    RuntimeDiagnostic(
+                        component="observer",
+                        stage="emit",
+                        error_type=type(exc).__name__,
+                        message=str(exc),
+                    )
+                )
 
     def _should_raise_memory_failure(self) -> bool:
         value = getattr(

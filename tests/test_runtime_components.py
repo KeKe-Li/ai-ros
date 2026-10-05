@@ -102,3 +102,26 @@ def test_step_executor_retries_and_records_trace():
     assert context.resolve_params({"object_id": grasp_step.params["object_id"]}) == {
         "object_id": "red_cube"
     }
+
+
+class _BoomObserver:
+    def on_event(self, event) -> None:
+        raise RuntimeError("observer exploded")
+
+
+def test_runtime_hooks_collects_observer_diagnostic_without_stopping_other_observers():
+    from robot_agent.runtime.events import RuntimeEvent
+    from robot_agent.runtime.hooks import RuntimeHooks
+
+    _, world = build_pick_and_place_world()
+    recorder = _Recorder()
+    hooks = RuntimeHooks(observers=[_BoomObserver(), recorder])
+
+    hooks.emit(RuntimeEvent("task_started", world=world, goal=GOAL))
+
+    assert [event.kind for event in recorder.events] == ["task_started"]
+    diagnostics = hooks.diagnostics
+    assert len(diagnostics) == 1
+    assert diagnostics[0].component == "observer"
+    assert diagnostics[0].stage == "emit"
+    assert diagnostics[0].error_type == "RuntimeError"

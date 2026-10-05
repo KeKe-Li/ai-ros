@@ -7,6 +7,10 @@ from typing import Any
 
 from robot_agent.core.errors import PlanningError, UnknownSkillError
 from robot_agent.planning.base import OutputRef, Plan, SkillCall, ToolCall
+from robot_agent.planning.dependency_graph import (
+    build_dependency_graph,
+    topological_order,
+)
 from robot_agent.planning.goal import GoalSpec, InContainerGoal
 from robot_agent.skills.manager import SkillManager
 from robot_agent.tools.registry import ToolRegistry
@@ -46,8 +50,9 @@ class PlanValidator:
         if len(set(step_ids)) != len(step_ids):
             raise PlanningError("计划中存在重复 step_id")
 
-        id_to_index = {step_id: index for index, step_id in enumerate(step_ids)}
-        self._validate_dependencies(plan, id_to_index)
+        graph = build_dependency_graph(plan.steps, _dependency_error)
+        topological_order(plan.steps, _dependency_error)
+        id_to_index = graph.id_to_index
         for index, step in enumerate(plan.steps):
             if not isinstance(step.params, Mapping):
                 raise PlanningError(f"步骤 {step.step_id} 的 params 必须是映射")
@@ -58,33 +63,6 @@ class PlanValidator:
                 self._validate_tool(step)
             else:
                 raise PlanningError(f"不支持的计划步骤类型：{type(step).__name__}")
-
-    @staticmethod
-    def _validate_dependencies(plan: Plan, id_to_index: dict[str, int]) -> None:
-        size = len(plan.steps)
-        indegree = [0] * size
-        adjacency: list[list[int]] = [[] for _ in range(size)]
-        for index, step in enumerate(plan.steps):
-            for dependency in step.depends_on:
-                source_index = id_to_index.get(dependency)
-                if source_index is None or source_index == index:
-                    raise PlanningError(
-                        f"步骤 {step.step_id} 存在非法依赖：{dependency}"
-                    )
-                adjacency[source_index].append(index)
-                indegree[index] += 1
-
-        ready = [index for index, degree in enumerate(indegree) if degree == 0]
-        visited = 0
-        while ready:
-            current = ready.pop()
-            visited += 1
-            for following in adjacency[current]:
-                indegree[following] -= 1
-                if indegree[following] == 0:
-                    ready.append(following)
-        if visited != size:
-            raise PlanningError("计划存在循环依赖")
 
     def _validate_refs(
         self, step: SkillCall | ToolCall, index: int, id_to_index: dict[str, int]
@@ -184,3 +162,7 @@ def _iter_refs(value: Any) -> Iterator[OutputRef]:
     elif isinstance(value, (list, tuple)):
         for item in value:
             yield from _iter_refs(item)
+
+
+def _dependency_error(step_id: str, dependency: str) -> PlanningError:
+    return PlanningError(f"步骤 {step_id} 存在非法依赖：{dependency}")

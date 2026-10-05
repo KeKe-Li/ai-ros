@@ -20,6 +20,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from robot_agent.backends.base import RobotBackend
+from robot_agent.core.errors import PlanningStageFailure
 from robot_agent.core.task import Task, TaskStatus
 from robot_agent.planning.base import Planner
 from robot_agent.planning.validator import PlanValidator
@@ -129,9 +130,14 @@ class AgentRuntime:
             prepared = self._runtime_planner.prepare(goal, world)
             goal_spec = prepared.goal_spec
             steps = prepared.steps
-        except Exception as exc:  # noqa: BLE001 - 运行时边界统一转换为失败报告
-            stage = _planning_stage(exc)
-            return self._failure_report(task, world, trace, replans, goal, stage, exc)
+        except PlanningStageFailure as exc:
+            return self._failure_report(
+                task, world, trace, replans, goal, exc.stage, exc.cause
+            )
+        except Exception as exc:  # noqa: BLE001 - 兜底保留运行时边界
+            return self._failure_report(
+                task, world, trace, replans, goal, "规划失败", exc
+            )
 
         while True:
             context = ExecutionContext()
@@ -167,6 +173,10 @@ class AgentRuntime:
                     goal, world, goal_spec=goal_spec
                 )
                 steps = prepared.steps
+            except PlanningStageFailure as exc:
+                return self._failure_report(
+                    task, world, trace, replans, goal, "重规划失败", exc.cause
+                )
             except Exception as exc:  # noqa: BLE001 - 重规划失败必须形成任务终态
                 return self._failure_report(
                     task, world, trace, replans, goal, "重规划失败", exc
@@ -233,19 +243,3 @@ class AgentRuntime:
             replans=replans,
             diagnostics=self._hooks.diagnostics,
         )
-
-
-def _planning_stage(exc: Exception) -> str:
-    message = str(exc)
-    if "调度" in message or "非法依赖" in message or "循环依赖" in message:
-        return "调度失败"
-    if (
-        "计划" in message
-        or "步骤" in message
-        or "未注册的工具" in message
-        or "未注册的技能" in message
-    ):
-        return "计划验证失败"
-    if "目标" in message or "世界" in message:
-        return "目标解析失败"
-    return "规划失败"

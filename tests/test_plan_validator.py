@@ -187,3 +187,22 @@ def test_validator_allows_empty_plan_only_when_goal_is_satisfied():
     assert cube is not None
     done = world.with_object("red_cube", replace(cube, in_container="box"))
     _validator().validate(Plan(GOAL), goal, done)
+
+
+def test_validator_rejects_self_dependency_by_step_id():
+    _, world = build_pick_and_place_world()
+    goal = parse_goal(GOAL, world)
+    plan = Plan(
+        GOAL,
+        (
+            SkillCall(
+                "detect",
+                {"object_id": "red_cube", "graspable": True},
+                depends_on=("detect_object",),
+                step_id="detect_object",
+            ),
+        ),
+    )
+
+    with pytest.raises(PlanningError, match="非法依赖"):
+        _validator().validate(plan, goal, world)

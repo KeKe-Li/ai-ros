@@ -12,8 +12,8 @@ from __future__ import annotations
 import json
 import queue
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Protocol
 
 from robot_agent.display.web.broadcaster import EventBroadcaster
 from robot_agent.display.web.dashboard_html import DASHBOARD_HTML
@@ -24,37 +24,77 @@ from robot_agent.runtime.events import RuntimeEvent
 _SSE_POLL_SECONDS = 1.0
 
 
+class _PayloadBroadcaster(Protocol):
+    def publish(self, payload: dict[str, object]) -> None: ...
+
+
 class WebMonitor:
     """把运行时事件推送到浏览器的观察者（实现 RuntimeObserver）。
 
     min_interval 用于在实时演示时放慢节奏，让浏览器看清闭环推进（默认 0 不节流）。
+    queue_limit 用于限制节流模式下待发布事件积压；队满时丢弃最旧待发布事件。
     """
 
     def __init__(
-        self, broadcaster: EventBroadcaster, min_interval: float = 0.0
+        self,
+        broadcaster: _PayloadBroadcaster,
+        min_interval: float = 0.0,
+        queue_limit: int = 256,
     ) -> None:
         if min_interval < 0:
             raise ValueError("min_interval 不能小于 0")
+        if queue_limit <= 0:
+            raise ValueError("queue_limit 必须大于 0")
         self._broadcaster = broadcaster
         self._min_interval = min_interval
-        self._pending: queue.SimpleQueue[dict[str, object]] | None = None
+        self._pending: queue.Queue[dict[str, object]] | None = None
+        self._thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self._closed = False
         if min_interval > 0:
-            self._pending = queue.SimpleQueue()
-            threading.Thread(target=self._publish_loop, daemon=True).start()
+            self._pending = queue.Queue(maxsize=queue_limit)
+            self._thread = threading.Thread(target=self._publish_loop, daemon=True)
+            self._thread.start()
 
     def on_event(self, event: RuntimeEvent) -> None:
         payload = event_to_dict(event)
         if self._pending is None:
-            self._broadcaster.publish(payload)
+            if not self._closed:
+                self._broadcaster.publish(payload)
             return
-        self._pending.put(payload)
+        with self._lock:
+            if self._closed:
+                return
+            try:
+                self._pending.put_nowait(payload)
+            except queue.Full:
+                self._pending.get_nowait()
+                self._pending.put_nowait(payload)
+
+    def stop(self) -> None:
+        self._closed = True
+        self._stop_event.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=5)
+            if not thread.is_alive():
+                self._thread = None
+
+    close = stop
 
     def _publish_loop(self) -> None:
         assert self._pending is not None
         while True:
-            payload = self._pending.get()
+            if self._stop_event.is_set() and self._pending.empty():
+                return
+            try:
+                payload = self._pending.get(timeout=0.1)
+            except queue.Empty:
+                continue
             self._broadcaster.publish(payload)
-            time.sleep(self._min_interval)
+            if self._min_interval > 0 and self._stop_event.wait(self._min_interval):
+                continue
 
 
 def _make_handler(broadcaster: EventBroadcaster) -> type[BaseHTTPRequestHandler]:

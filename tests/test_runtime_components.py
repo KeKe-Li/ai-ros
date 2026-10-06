@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from robot_agent.backends.sim_backend import SimBackend
+from robot_agent.planning.base import OutputRef, SkillCall, ToolCall
 from robot_agent.planning.mock_planner import MockPlanner
 from robot_agent.runtime import ExecutionContext
 from robot_agent.runtime.agent_runtime import MemoryFailurePolicy
@@ -102,6 +103,119 @@ def test_step_executor_retries_and_records_trace():
     assert context.resolve_params({"object_id": grasp_step.params["object_id"]}) == {
         "object_id": "red_cube"
     }
+
+
+def test_step_executor_classifies_output_resolution_failure():
+    from robot_agent.runtime.hooks import RuntimeHooks
+    from robot_agent.runtime.step_executor import StepExecutor
+
+    grid, world = build_pick_and_place_world()
+    executor = StepExecutor(
+        backend=SimBackend(grid),
+        skills=default_skill_manager(),
+        hooks=RuntimeHooks(),
+        max_retries=0,
+        tools=default_tool_registry(),
+    )
+    trace = []
+
+    _, ok = executor.run_with_retry(
+        SkillCall(
+            "grasp",
+            {"object_id": OutputRef("missing", path=("object_ids", 0))},
+            step_id="grasp_object",
+        ),
+        world,
+        trace,
+        GOAL,
+        ExecutionContext(),
+    )
+
+    assert ok is False
+    assert trace[0].failure_kind == "resolve_params_failed"
+    assert trace[0].error_type == "OutputResolutionError"
+
+
+def test_step_executor_classifies_tool_invocation_failure():
+    from robot_agent.runtime.hooks import RuntimeHooks
+    from robot_agent.runtime.step_executor import StepExecutor
+
+    grid, world = build_pick_and_place_world()
+    tools = default_tool_registry()
+    tools.register(
+        "explode",
+        "模拟失败工具",
+        lambda world: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    executor = StepExecutor(
+        backend=SimBackend(grid),
+        skills=default_skill_manager(),
+        hooks=RuntimeHooks(),
+        max_retries=0,
+        tools=tools,
+    )
+    trace = []
+
+    _, ok = executor.run_with_retry(
+        ToolCall("explode", step_id="explode_tool"),
+        world,
+        trace,
+        GOAL,
+        ExecutionContext(),
+    )
+
+    assert ok is False
+    assert trace[0].failure_kind == "tool_invoke_failed"
+    assert trace[0].error_type == "RuntimeError"
+
+
+def test_step_executor_classifies_postcondition_failure_without_exception():
+    from robot_agent.runtime.hooks import RuntimeHooks
+    from robot_agent.runtime.step_executor import StepExecutor
+
+    class _FalsePostconditionSkill:
+        name = "navigate"
+        required_params = ()
+
+        def capability_spec(self):
+            return default_skill_manager().get("navigate").capability_spec()
+
+        def preconditions(self, world, params):
+            return True
+
+        def execute(self, backend, world, params):
+            from robot_agent.core.types import SkillResult
+
+            target = world.get(params["target_object"]).pose
+            result, new_world = backend.navigate_to(world, target)
+            return SkillResult.success("已导航") if result.ok else result, new_world
+
+        def postconditions(self, before, after, params, result):
+            return False
+
+    grid, world = build_pick_and_place_world()
+    manager = default_skill_manager()
+    manager._skills["navigate"] = _FalsePostconditionSkill()  # type: ignore[assignment]
+    executor = StepExecutor(
+        backend=SimBackend(grid),
+        skills=manager,
+        hooks=RuntimeHooks(),
+        max_retries=0,
+        tools=default_tool_registry(),
+    )
+    trace = []
+
+    _, ok = executor.run_with_retry(
+        SkillCall("navigate", {"target_object": "red_cube"}, step_id="navigate_object"),
+        world,
+        trace,
+        GOAL,
+        ExecutionContext(),
+    )
+
+    assert ok is False
+    assert trace[0].failure_kind == "postcondition_failed"
+    assert trace[0].error_type is None
 
 
 class _BoomObserver:

@@ -32,6 +32,7 @@ class StepRecord:
     raw_params: Mapping[str, object] = field(default_factory=dict)
     output: Mapping[str, object] = field(default_factory=dict)
     error_type: str | None = None
+    failure_kind: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "params", freeze_mapping(self.params))

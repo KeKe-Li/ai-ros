@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 import urllib.request
 
 import pytest
@@ -165,6 +167,54 @@ def test_web_monitor_min_interval_does_not_block_on_event():
 
     assert elapsed < 0.1
     assert bus.history()
+
+
+def test_web_monitor_stop_exits_background_thread():
+    bus = EventBroadcaster()
+    monitor = WebMonitor(bus, min_interval=0.01)
+
+    monitor.on_event(_sample_event())
+    deadline = time.perf_counter() + 1.0
+    while not bus.history() and time.perf_counter() < deadline:
+        time.sleep(0.01)
+
+    monitor.stop()
+
+    assert monitor._thread is None or not monitor._thread.is_alive()
+
+
+def test_web_monitor_uses_bounded_queue_and_drops_oldest_pending_event():
+    published = []
+    publish_started = threading.Event()
+    release_publish = threading.Event()
+
+    class _BlockingBroadcaster:
+        def publish(self, payload):
+            publish_started.set()
+            release_publish.wait(timeout=1)
+            published.append(payload)
+
+    monitor = WebMonitor(_BlockingBroadcaster(), min_interval=0.01, queue_limit=2)
+    try:
+        first = _sample_event("first")
+        second = _sample_event("second")
+        third = _sample_event("third")
+        fourth = _sample_event("fourth")
+
+        monitor.on_event(first)
+        assert publish_started.wait(timeout=1)
+        monitor.on_event(second)
+        monitor.on_event(third)
+        monitor.on_event(fourth)
+
+        release_publish.set()
+        deadline = time.perf_counter() + 1.0
+        while len(published) < 3 and time.perf_counter() < deadline:
+            time.sleep(0.01)
+    finally:
+        monitor.stop()
+
+    assert [item["kind"] for item in published] == ["first", "third", "fourth"]
 
 
 def _serve(bus):

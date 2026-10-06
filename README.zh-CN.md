@@ -83,14 +83,14 @@ pytest --cov=robot_agent
 - 后续步骤通过结构化 `OutputRef` 引用技能或工具输出；引用缺失、路径错误或值不符合预期时不会执行物理动作。
 - `PlanValidator` 在调度前验证步骤、依赖、注册能力、必需参数和目标一致性。
 - 默认规则规划器使用 `detect` 的真实 `object_ids[0]` 驱动 `grasp`，并校验检测对象就是目标对象。
-- 计划参数、输出、世界对象和执行上下文都保存为深不可变快照；每条 `StepRecord` 完整保留调用类型、原始引用、解析后参数、输出与错误类型，便于审计。
+- 计划参数、输出、世界对象和执行上下文都保存为深不可变快照；每条 `StepRecord` 完整保留调用类型、原始引用、解析后参数、输出、错误类型以及稳定的 `failure_kind` 分类，便于审计。
 
 ### 可靠性与诊断
 
 - 长期 Memory 先校验 JSON，再通过同目录临时文件原子替换；写入失败时内存状态和旧文件均保持不变，损坏文件会明确报错。
 - `AgentRuntime` 默认以 best-effort 策略写 Memory，并在 `RunReport` 返回结构化诊断；严格集成可选择 `MemoryFailurePolicy.RAISE`。
-- 在线规划失败并回退离线规划器时，`LLMPlanner.last_diagnostic` 会保留结构化原因。
-- SSE 默认最多保留 1000 条历史、每个订阅者积压 256 条事件。慢客户端会丢弃自身最旧事件，不会阻塞机器人执行；`dropped_events()` 可查询累计数量。
+- `LLMPlanner` 支持 `fallback_mode="allow" | "strict"`：allow 模式会在 `last_diagnostic` 中保留 LLM 失败原因并自动回退离线规划器；strict 模式则直接暴露原始 LLM 异常，但仍保留结构化诊断。
+- SSE 默认最多保留 1000 条历史、每个订阅者积压 256 条事件。慢客户端会丢弃自身最旧事件，不会阻塞机器人执行；`dropped_events()` 可查询累计数量。`WebMonitor` 自身也使用有界待发布队列，并提供显式 `stop()` 生命周期，避免演示退出后残留后台发布线程。
 
 ### 开发与验证建议
 
@@ -132,7 +132,7 @@ python -m pip wheel . --no-deps --wheel-dir dist
 - **接入 ROS2**：在 `backends/ros2_backend.py` 中按注释映射到 Nav2 action、感知 service、
   MoveIt/机械臂 action 与 TF，实现 `RobotBackend` 四个方法，上层无需改动。
 - **接入真实 LLM**：`pip install -e ".[llm]"` 并设置 `ANTHROPIC_API_KEY`，
-  `python -m robot_agent.cli demo --planner llm`；离线/失败时自动回退到 MockPlanner。
+  `python -m robot_agent.cli demo --planner llm --llm-fallback allow`；若希望在线规划失败时直接快失败，可改用 `--llm-fallback strict`。
 - **新增技能**：继承 `skills/base.py::Skill`，实现执行逻辑以及基于执行前后世界的后置条件，并在 `default_skill_manager` 注册即可被统一调度。
 - **新增显示端**：实现 `RuntimeObserver.on_event` 并订阅事件总线即可，运行时无需改动。
 

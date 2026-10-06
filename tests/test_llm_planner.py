@@ -12,21 +12,46 @@ from robot_agent.world.grid_world import build_pick_and_place_world
 GOAL = "把红色方块放到箱子里"
 
 
-def test_offline_falls_back_to_mock_planner():
-    # Arrange：无 anthropic/无密钥环境
+def test_allow_mode_falls_back_to_mock_planner_when_llm_fails(monkeypatch):
     _, world = build_pick_and_place_world()
-    planner = LLMPlanner()
+    planner = LLMPlanner(fallback_mode="allow")
 
-    # Act
+    def _boom(goal, world):
+        raise RuntimeError("llm unavailable")
+
+    monkeypatch.setattr(planner, "_plan_via_llm", _boom)
+
     plan = planner.plan(GOAL, world)
 
-    # Assert：回退到规则分解，结果与 MockPlanner 一致
     assert planner.last_source == "fallback"
     assert planner.last_diagnostic is not None
-    assert planner.last_diagnostic.source == "fallback"
-    assert planner.last_diagnostic.error_type
+    assert planner.last_diagnostic.source == "llm"
+    assert planner.last_diagnostic.error_type == "RuntimeError"
     expected = MockPlanner().plan(GOAL, world)
     assert [s.skill for s in plan.steps] == [s.skill for s in expected.steps]
+
+
+def test_strict_mode_raises_when_llm_fails(monkeypatch):
+    _, world = build_pick_and_place_world()
+    planner = LLMPlanner(fallback_mode="strict")
+
+    def _boom(goal, world):
+        raise RuntimeError("llm unavailable")
+
+    monkeypatch.setattr(planner, "_plan_via_llm", _boom)
+
+    with pytest.raises(RuntimeError, match="llm unavailable"):
+        planner.plan(GOAL, world)
+
+    assert planner.last_source == "error"
+    assert planner.last_diagnostic is not None
+    assert planner.last_diagnostic.source == "llm"
+    assert planner.last_diagnostic.error_type == "RuntimeError"
+
+
+def test_llm_planner_rejects_unknown_fallback_mode():
+    with pytest.raises(ValueError, match="fallback_mode"):
+        LLMPlanner(fallback_mode="maybe")
 
 
 def test_parse_plan_from_valid_json():

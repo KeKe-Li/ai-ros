@@ -22,8 +22,9 @@ from robot_agent.runtime.agent_runtime import RunReport
 _STATUS_ICON = {"ok": "✅", "failed": "❌"}
 
 
-def _make_planner(name: str) -> Planner:
+def _make_planner(args: argparse.Namespace) -> Planner:
     """按名称构造规划器。llm 分解器为可选能力，延迟导入。"""
+    name = args.planner
     if name == "mock":
         from robot_agent.planning.mock_planner import MockPlanner
 
@@ -31,7 +32,7 @@ def _make_planner(name: str) -> Planner:
     if name == "llm":
         from robot_agent.planning.llm_planner import LLMPlanner
 
-        return LLMPlanner()
+        return LLMPlanner(fallback_mode=args.llm_fallback)
     raise SystemExit(f"未知的 planner：{name}（可选 mock / llm）")
 
 
@@ -62,7 +63,7 @@ def _print_report(report: RunReport, goal: str, verbose: bool) -> None:
 
 
 def _cmd_demo(args: argparse.Namespace) -> int:
-    planner = _make_planner(args.planner)
+    planner = _make_planner(args)
     memory = Memory() if args.verbose else None
     observers: list[object] = []
 
@@ -72,6 +73,7 @@ def _cmd_demo(args: argparse.Namespace) -> int:
         observers.append(TerminalMonitor(step_delay=args.frame_delay))
 
     server = None
+    web_monitor = None
     if args.web:
         from robot_agent.display.web import (
             DashboardServer,
@@ -83,7 +85,8 @@ def _cmd_demo(args: argparse.Namespace) -> int:
         server = DashboardServer(broadcaster, port=args.port)
         server.start()
         print(f"上位机仪表盘已启动：{server.url}")
-        observers.append(WebMonitor(broadcaster, min_interval=args.frame_delay))
+        web_monitor = WebMonitor(broadcaster, min_interval=args.frame_delay)
+        observers.append(web_monitor)
         if args.open:
             import webbrowser
 
@@ -109,6 +112,8 @@ def _cmd_demo(args: argparse.Namespace) -> int:
         except KeyboardInterrupt:
             print("\n正在关闭仪表盘…")
         finally:
+            if web_monitor is not None:
+                web_monitor.stop()
             server.stop()
     return 0 if report.succeeded else 1
 
@@ -124,6 +129,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     demo.add_argument(
         "--inject-failure", action="store_true", help="注入一次抓取故障以演示恢复"
+    )
+    demo.add_argument(
+        "--llm-fallback",
+        default="allow",
+        choices=["allow", "strict"],
+        help="LLM 规划失败时的策略（仅对 --planner llm 生效）",
     )
     demo.add_argument("--verbose", action="store_true", help="打印世界快照与记忆")
     demo.add_argument(

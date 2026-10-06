@@ -1,8 +1,8 @@
 """基于 Claude 的任务分解器（可选能力）。
 
 将目标 + 世界摘要交给 Claude，要求其输出 JSON 计划，再校验为 Plan。
-为保证离线/无密钥时仍可运行、可复现，任何失败（未安装 anthropic、无 API key、
-网络错误、解析/校验失败）都会**优雅回退**到 MockPlanner，并在 last_source 中标注来源。
+为保证离线/无密钥时仍可运行、可复现，默认会在在线规划失败时**优雅回退**到
+MockPlanner；也可切到 strict 模式，让失败直接向上抛出。
 
 模型默认使用 claude-sonnet-5（可在构造时覆盖）。仅在调用 plan() 时才导入
 anthropic，避免核心框架产生硬依赖。
@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from robot_agent.core.capabilities import CapabilityKind, CapabilitySpec
 from robot_agent.planning.base import (
@@ -55,13 +56,17 @@ class LLMPlanner(Planner):
         max_tokens: int = 1024,
         fallback: Planner | None = None,
         capabilities: Sequence[CapabilitySpec] | None = None,
+        fallback_mode: Literal["allow", "strict"] = "allow",
     ) -> None:
         self._model = model
         self._max_tokens = max_tokens
+        if fallback_mode not in ("allow", "strict"):
+            raise ValueError("fallback_mode 必须是 allow 或 strict")
         self._fallback = fallback or MockPlanner()
+        self._fallback_mode = fallback_mode
         self._capabilities = tuple(capabilities or _default_capabilities())
         self._system = _build_system(self._capabilities)
-        self.last_source: str = "unset"  # "llm" 或 "fallback"，供调用方观测
+        self.last_source: str = "unset"  # "llm" / "fallback" / "error"
         self.last_diagnostic: PlannerDiagnostic | None = None
 
     def plan(self, goal: str, world: WorldState) -> Plan:
@@ -70,14 +75,17 @@ class LLMPlanner(Planner):
             self.last_source = "llm"
             self.last_diagnostic = None
             return plan
-        except Exception as exc:  # 任何失败都回退，保证可用性与可复现
-            self.last_source = "fallback"
+        except Exception as exc:  # noqa: BLE001 - LLM 边界错误统一记诊断
             self.last_diagnostic = PlannerDiagnostic(
-                source="fallback",
+                source="llm",
                 stage="plan",
                 error_type=type(exc).__name__,
                 message=str(exc),
             )
+            if self._fallback_mode == "strict":
+                self.last_source = "error"
+                raise
+            self.last_source = "fallback"
             return self._fallback.plan(goal, world)
 
     # --- 内部实现 ---

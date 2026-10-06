@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from robot_agent.backends.base import RobotBackend
+from robot_agent.core.errors import OutputResolutionError
 from robot_agent.core.types import SkillResult
 from robot_agent.planning.base import PlanStep, SkillCall, ToolCall
 from robot_agent.runtime.context import ExecutionContext
@@ -12,6 +15,18 @@ from robot_agent.runtime.monitor import ExecutionMonitor
 from robot_agent.skills.manager import SkillManager
 from robot_agent.tools.registry import ToolRegistry
 from robot_agent.world.state import WorldState
+
+
+@dataclass(frozen=True)
+class StepAttempt:
+    """一次步骤尝试的统一结果。"""
+
+    result: SkillResult
+    world: WorldState
+    passed: bool
+    resolved_params: dict[str, object]
+    error_type: str | None = None
+    failure_kind: str | None = None
 
 
 class StepExecutor:
@@ -58,83 +73,181 @@ class StepExecutor:
     ) -> tuple[WorldState, bool]:
         attempt = 0
         while True:
-            result, new_world, passed, resolved_params = self._try_step(
-                step, world, context
-            )
+            outcome = self._try_step(step, world, context)
             step_name = step_name_for(step)
             record = StepRecord(
                 skill=step_name,
-                params=resolved_params,
-                status="ok" if passed else "failed",
-                message=result.message,
+                params=outcome.resolved_params,
+                status="ok" if outcome.passed else "failed",
+                message=outcome.result.message,
                 attempt=attempt,
                 step_id=step.step_id,
                 kind="skill" if isinstance(step, SkillCall) else "tool",
                 raw_params=step.params,
-                output=result.data,
-                error_type=(
-                    str(result.data["exception"])
-                    if "exception" in result.data
-                    else None
-                ),
+                output=outcome.result.data,
+                error_type=outcome.error_type,
+                failure_kind=outcome.failure_kind,
             )
             trace.append(record)
             self._hooks.remember(
                 "step",
                 skill=step_name,
-                passed=passed,
-                message=result.message,
+                passed=outcome.passed,
+                message=outcome.result.message,
                 attempt=attempt,
+                failure_kind=outcome.failure_kind,
             )
-            if "exception" in result.data:
+            if outcome.error_type is not None:
                 self._hooks.remember(
-                    "exception", skill=step_name, error=result.message, attempt=attempt
+                    "exception",
+                    skill=step_name,
+                    error=outcome.result.message,
+                    attempt=attempt,
+                    error_type=outcome.error_type,
+                    failure_kind=outcome.failure_kind,
                 )
             self._hooks.emit(
                 RuntimeEvent(
                     "step_result",
-                    world=new_world if passed else world,
+                    world=outcome.world if outcome.passed else world,
                     goal=goal,
                     step=record,
                 )
             )
-            if passed:
-                context.record(step.step_id, result.data)
-                return new_world, True
+            if outcome.passed:
+                context.record(step.step_id, outcome.result.data)
+                return outcome.world, True
             attempt += 1
             if attempt > self._max_retries:
                 return world, False
 
     def _try_step(
         self, step: PlanStep, world: WorldState, context: ExecutionContext
-    ) -> tuple[SkillResult, WorldState, bool, dict[str, object]]:
+    ) -> StepAttempt:
         resolved_params: dict[str, object] = {}
         try:
             resolved_params = context.resolve_params(step.params)
-            if isinstance(step, SkillCall):
-                result, new_world = self._skills.invoke(
-                    step.skill, self._backend, world, resolved_params
-                )
-                skill = self._skills.get(step.skill)
-                passed = self._monitor.check(
-                    result, skill, world, new_world, resolved_params
-                )
-            elif isinstance(step, ToolCall):
-                if self._tools is None:
-                    raise RuntimeError("运行时未配置工具注册表")
-                value = self._tools.call(step.tool, world, **resolved_params)
-                result = SkillResult.success(f"工具调用成功：{step.tool}", value=value)
-                new_world = world
-                passed = True
-            else:
-                raise TypeError(f"不支持的步骤类型：{type(step).__name__}")
-            return result, new_world, passed, resolved_params
-        except Exception as exc:  # noqa: BLE001 - 刻意兜底，保证运行时不被异常终止
-            failure = SkillResult.failure(
-                f"执行异常（{type(exc).__name__}）：{exc}",
-                exception=type(exc).__name__,
+        except OutputResolutionError as exc:
+            return self._failed_attempt(
+                world,
+                resolved_params,
+                failure_kind="resolve_params_failed",
+                stage="执行异常",
+                exc=exc,
             )
-            return failure, world, False, resolved_params
+
+        if isinstance(step, SkillCall):
+            return self._run_skill(step, world, resolved_params)
+        if isinstance(step, ToolCall):
+            return self._run_tool(step, world, resolved_params)
+        return self._failed_attempt(
+            world,
+            resolved_params,
+            failure_kind="unsupported_step_type",
+            stage="步骤类型异常",
+            exc=TypeError(f"不支持的步骤类型：{type(step).__name__}"),
+        )
+
+    def _run_skill(
+        self,
+        step: SkillCall,
+        world: WorldState,
+        resolved_params: dict[str, object],
+    ) -> StepAttempt:
+        try:
+            result, new_world = self._skills.invoke(
+                step.skill, self._backend, world, resolved_params
+            )
+        except Exception as exc:  # noqa: BLE001 - 技能属于可替换运行边界
+            return self._failed_attempt(
+                world,
+                resolved_params,
+                failure_kind="skill_invoke_failed",
+                stage="执行异常",
+                exc=exc,
+            )
+
+        try:
+            skill = self._skills.get(step.skill)
+            passed = self._monitor.check(
+                result, skill, world, new_world, resolved_params
+            )
+        except Exception as exc:  # noqa: BLE001 - 后置条件/监控异常必须被收敛
+            return self._failed_attempt(
+                world,
+                resolved_params,
+                failure_kind="postcondition_failed",
+                stage="执行异常",
+                exc=exc,
+            )
+
+        failure_kind = None
+        if not passed:
+            failure_kind = (
+                "postcondition_failed" if result.ok else "skill_execution_failed"
+            )
+        return StepAttempt(
+            result=result,
+            world=new_world,
+            passed=passed,
+            resolved_params=resolved_params,
+            failure_kind=failure_kind,
+        )
+
+    def _run_tool(
+        self,
+        step: ToolCall,
+        world: WorldState,
+        resolved_params: dict[str, object],
+    ) -> StepAttempt:
+        if self._tools is None:
+            return self._failed_attempt(
+                world,
+                resolved_params,
+                failure_kind="tool_invoke_failed",
+                stage="执行异常",
+                exc=RuntimeError("运行时未配置工具注册表"),
+            )
+        try:
+            value = self._tools.call(step.tool, world, **resolved_params)
+        except Exception as exc:  # noqa: BLE001 - 工具调用异常收敛为失败轨迹
+            return self._failed_attempt(
+                world,
+                resolved_params,
+                failure_kind="tool_invoke_failed",
+                stage="执行异常",
+                exc=exc,
+            )
+        result = SkillResult.success(f"工具调用成功：{step.tool}", value=value)
+        return StepAttempt(
+            result=result,
+            world=world,
+            passed=True,
+            resolved_params=resolved_params,
+        )
+
+    @staticmethod
+    def _failed_attempt(
+        world: WorldState,
+        resolved_params: dict[str, object],
+        *,
+        failure_kind: str,
+        stage: str,
+        exc: Exception,
+    ) -> StepAttempt:
+        result = SkillResult.failure(
+            f"{stage}（{type(exc).__name__}）：{exc}",
+            exception=type(exc).__name__,
+            failure_kind=failure_kind,
+        )
+        return StepAttempt(
+            result=result,
+            world=world,
+            passed=False,
+            resolved_params=resolved_params,
+            error_type=type(exc).__name__,
+            failure_kind=failure_kind,
+        )
 
 
 def step_name_for(step: PlanStep) -> str:

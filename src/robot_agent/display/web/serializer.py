@@ -65,5 +65,6 @@ def event_to_dict(event: RuntimeEvent) -> dict[str, Any]:
             "raw_params": to_jsonable(event.step.raw_params),
             "output": to_jsonable(event.step.output),
             "error_type": event.step.error_type,
+            "failure_kind": event.step.failure_kind,
         }
     return payload

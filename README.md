@@ -84,14 +84,14 @@ During execution the runtime emits structured events through a decoupled **event
 - Later steps use structured `OutputRef` values to consume skill or tool outputs. Missing paths or unexpected values stop execution before the physical action.
 - `PlanValidator` checks step structure, dependencies, registered capabilities, required parameters, and goal alignment before scheduling.
 - The default planner binds `detect.object_ids[0]` to `grasp.object_id` and verifies that the detected object is the requested target.
-- Plan parameters, outputs, world objects, and execution-context values are deeply frozen snapshots. Each `StepRecord` preserves the call kind, raw references, resolved parameters, output, and error type for auditability.
+- Plan parameters, outputs, world objects, and execution-context values are deeply frozen snapshots. Each `StepRecord` preserves the call kind, raw references, resolved parameters, output, error type, and stable `failure_kind` classification for auditability.
 
 ### Reliability and diagnostics
 
 - Long-term Memory validates JSON before an atomic same-directory replace; failed writes leave both the in-memory state and the previous file unchanged, while corrupted files fail explicitly.
 - `AgentRuntime` uses best-effort Memory writes by default and returns structured diagnostics in `RunReport`; strict integrations can select `MemoryFailurePolicy.RAISE`.
-- `LLMPlanner.last_diagnostic` records structured fallback information when an online planner fails and the offline planner takes over.
-- SSE keeps at most 1,000 history events and 256 queued events per subscriber by default. Slow clients drop their oldest queued event so robot execution is never blocked, and `dropped_events()` exposes the count.
+- `LLMPlanner` supports `fallback_mode="allow" | "strict"`: allow mode records the LLM failure in `last_diagnostic` and falls back to the offline planner; strict mode surfaces the original LLM error while still preserving diagnostics.
+- SSE keeps at most 1,000 history events and 256 queued events per subscriber by default. Slow clients drop their oldest queued event so robot execution is never blocked, and `dropped_events()` exposes the count. `WebMonitor` also uses a bounded pending queue and an explicit `stop()` lifecycle so demo exits do not leave publisher threads behind.
 
 ### Development & verification guidance
 
@@ -130,7 +130,7 @@ By default, judge against the current task's goal; do not treat every task as fu
 ### Extension points
 
 - **Integrate ROS2**: in `backends/ros2_backend.py`, follow the mapping notes (Nav2 action, perception service, MoveIt/arm action + TF) and implement `RobotBackend`'s four methods — the upper layer stays unchanged.
-- **Integrate a real LLM**: `pip install -e ".[llm]"`, set `ANTHROPIC_API_KEY`, then `python -m robot_agent.cli demo --planner llm`; it falls back to MockPlanner offline or on failure.
+- **Integrate a real LLM**: `pip install -e ".[llm]"`, set `ANTHROPIC_API_KEY`, then `python -m robot_agent.cli demo --planner llm --llm-fallback allow`; switch to `--llm-fallback strict` when you want online-planning failures to fail fast instead of silently falling back.
 - **Add a skill**: subclass `skills/base.py::Skill`, implement execution and pre/post-world postcondition checks, then register it in `default_skill_manager` for uniform dispatch.
 - **Add a display**: implement `RuntimeObserver.on_event` and subscribe to the event bus — the runtime stays unchanged.
 

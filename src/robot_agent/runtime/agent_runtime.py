@@ -69,6 +69,15 @@ class RunReport:
         return self.task.status is TaskStatus.SUCCEEDED
 
 
+@dataclass(frozen=True)
+class _ExecutionLoopFailure(Exception):
+    stage: str
+    cause: Exception
+    task: Task
+    world: WorldState
+    replans: int
+
+
 class AgentRuntime:
     """机器人上层智能主循环。"""
 
@@ -119,33 +128,74 @@ class AgentRuntime:
         """执行一个目标，返回运行报告。"""
         self._hooks.reset()
         task = Task(goal).to(TaskStatus.RUNNING)
+        self._start_task(goal, world, task)
+        trace: list[StepRecord] = []
+
+        try:
+            prepared = self._prepare_plan(goal, world)
+        except PlanningStageFailure as exc:
+            return self._failure_report(
+                task, world, trace, 0, goal, exc.stage, exc.cause
+            )
+        except Exception as exc:  # noqa: BLE001 - 兜底保留运行时边界
+            return self._failure_report(task, world, trace, 0, goal, "规划失败", exc)
+
+        goal_spec = prepared.goal_spec
+        try:
+            task, world, replans = self._execute_plan_loop(
+                goal, world, task, goal_spec, prepared.steps, trace
+            )
+        except _ExecutionLoopFailure as exc:
+            return self._failure_report(
+                exc.task, exc.world, trace, exc.replans, goal, exc.stage, exc.cause
+            )
+
+        if not task.is_terminal:
+            try:
+                task = self._finalize_task(goal, task, world, goal_spec)
+            except Exception as exc:  # noqa: BLE001 - 验证器属于可替换的运行时边界
+                return self._failure_report(
+                    task, world, trace, replans, goal, "目标验证失败", exc
+                )
+
+        self._hooks.emit(
+            RuntimeEvent(
+                "task_finished", world=world, goal=goal, task=task, replans=replans
+            )
+        )
+        return self._build_report(
+            task=task,
+            world=world,
+            trace=trace,
+            replans=replans,
+        )
+
+    def _start_task(self, goal: str, world: WorldState, task: Task) -> None:
         self._hooks.remember("task_started", goal=goal)
         self._hooks.emit(
             RuntimeEvent("task_started", world=world, goal=goal, task=task)
         )
-        trace: list[StepRecord] = []
+
+    def _prepare_plan(self, goal: str, world: WorldState):
+        return self._runtime_planner.prepare(goal, world)
+
+    def _execute_plan_loop(
+        self,
+        goal: str,
+        world: WorldState,
+        task: Task,
+        goal_spec: object,
+        steps: list[object],
+        trace: list[StepRecord],
+    ) -> tuple[Task, WorldState, int]:
         replans = 0
-
-        try:
-            prepared = self._runtime_planner.prepare(goal, world)
-            goal_spec = prepared.goal_spec
-            steps = prepared.steps
-        except PlanningStageFailure as exc:
-            return self._failure_report(
-                task, world, trace, replans, goal, exc.stage, exc.cause
-            )
-        except Exception as exc:  # noqa: BLE001 - 兜底保留运行时边界
-            return self._failure_report(
-                task, world, trace, replans, goal, "规划失败", exc
-            )
-
         while True:
             context = ExecutionContext()
             world, failed = self._step_executor.execute(
                 steps, world, trace, goal, context
             )
             if failed is None:
-                break
+                return task, world, replans
             if replans >= self._max_replans:
                 failed_name = step_name_for(failed)
                 task = task.to(
@@ -153,57 +203,80 @@ class AgentRuntime:
                     error=f"步骤失败且超出重规划上限：{failed_name}",
                 )
                 self._hooks.remember("task_failed", reason=task.error)
-                break
+                return task, world, replans
             replans += 1
-            task = task.to(TaskStatus.RECOVERING)
-            failed_name = step_name_for(failed)
-            self._hooks.remember("replan", attempt=replans, after_skill=failed_name)
-            self._hooks.emit(
-                RuntimeEvent(
-                    "replan",
-                    world=world,
-                    goal=goal,
-                    task=task,
-                    replans=replans,
-                    message=f"在 {failed_name} 后重规划",
-                )
-            )
+            task = self._announce_replan(goal, world, task, replans, failed)
             try:
                 prepared = self._runtime_planner.prepare(
                     goal, world, goal_spec=goal_spec
                 )
-                steps = prepared.steps
             except PlanningStageFailure as exc:
-                return self._failure_report(
-                    task, world, trace, replans, goal, "重规划失败", exc.cause
-                )
+                raise _ExecutionLoopFailure(
+                    stage="重规划失败",
+                    cause=exc.cause,
+                    task=task,
+                    world=world,
+                    replans=replans,
+                ) from exc
             except Exception as exc:  # noqa: BLE001 - 重规划失败必须形成任务终态
-                return self._failure_report(
-                    task, world, trace, replans, goal, "重规划失败", exc
-                )
+                raise _ExecutionLoopFailure(
+                    stage="重规划失败",
+                    cause=exc,
+                    task=task,
+                    world=world,
+                    replans=replans,
+                ) from exc
             task = task.to(TaskStatus.RUNNING)
+            steps = prepared.steps
             if not steps:
-                break
+                return task, world, replans
 
-        if not task.is_terminal:
-            try:
-                goal_satisfied = self._monitor.verify_goal(goal_spec, world)
-            except Exception as exc:  # noqa: BLE001 - 验证器属于可替换的运行时边界
-                return self._failure_report(
-                    task, world, trace, replans, goal, "目标验证失败", exc
-                )
-            if goal_satisfied:
-                task = task.to(TaskStatus.SUCCEEDED)
-                self._hooks.remember("task_succeeded", goal=goal)
-            else:
-                task = task.to(TaskStatus.FAILED, error="目标未达成")
-                self._hooks.remember("task_failed", reason=task.error)
-
+    def _announce_replan(
+        self,
+        goal: str,
+        world: WorldState,
+        task: Task,
+        replans: int,
+        failed_step,
+    ) -> Task:
+        recovering_task = task.to(TaskStatus.RECOVERING)
+        failed_name = step_name_for(failed_step)
+        self._hooks.remember("replan", attempt=replans, after_skill=failed_name)
         self._hooks.emit(
             RuntimeEvent(
-                "task_finished", world=world, goal=goal, task=task, replans=replans
+                "replan",
+                world=world,
+                goal=goal,
+                task=recovering_task,
+                replans=replans,
+                message=f"在 {failed_name} 后重规划",
             )
         )
+        return recovering_task
+
+    def _finalize_task(
+        self,
+        goal: str,
+        task: Task,
+        world: WorldState,
+        goal_spec,
+    ) -> Task:
+        goal_satisfied = self._monitor.verify_goal(goal_spec, world)
+        if goal_satisfied:
+            succeeded_task = task.to(TaskStatus.SUCCEEDED)
+            self._hooks.remember("task_succeeded", goal=goal)
+            return succeeded_task
+        failed_task = task.to(TaskStatus.FAILED, error="目标未达成")
+        self._hooks.remember("task_failed", reason=failed_task.error)
+        return failed_task
+
+    def _build_report(
+        self,
+        task: Task,
+        world: WorldState,
+        trace: list[StepRecord],
+        replans: int,
+    ) -> RunReport:
         return RunReport(
             task=task,
             world=world,
@@ -236,10 +309,9 @@ class AgentRuntime:
                 message=error,
             )
         )
-        return RunReport(
+        return self._build_report(
             task=failed_task,
             world=world,
-            trace=tuple(trace),
+            trace=trace,
             replans=replans,
-            diagnostics=self._hooks.diagnostics,
         )

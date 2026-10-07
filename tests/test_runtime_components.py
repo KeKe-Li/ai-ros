@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from robot_agent.backends.sim_backend import SimBackend
+from robot_agent.core.task import Task, TaskStatus
+from robot_agent.core.types import SkillResult
 from robot_agent.planning.base import OutputRef, SkillCall, ToolCall
 from robot_agent.planning.mock_planner import MockPlanner
 from robot_agent.runtime import ExecutionContext
 from robot_agent.runtime.agent_runtime import MemoryFailurePolicy
+from robot_agent.runtime.events import RuntimeDiagnostic
 from robot_agent.skills import default_skill_manager
 from robot_agent.tools import default_tool_registry
 from robot_agent.world.grid_world import build_pick_and_place_world
@@ -239,3 +242,66 @@ def test_runtime_hooks_collects_observer_diagnostic_without_stopping_other_obser
     assert diagnostics[0].component == "observer"
     assert diagnostics[0].stage == "emit"
     assert diagnostics[0].error_type == "RuntimeError"
+
+
+def test_agent_runtime_build_report_preserves_trace_and_diagnostics():
+    from robot_agent.runtime.agent_runtime import AgentRuntime
+    from robot_agent.runtime.events import StepRecord
+    from robot_agent.runtime.hooks import RuntimeHooks
+
+    grid, world = build_pick_and_place_world()
+    runtime = AgentRuntime(
+        SimBackend(grid),
+        default_skill_manager(),
+        MockPlanner(),
+    )
+    runtime._hooks = RuntimeHooks()  # type: ignore[assignment]
+    runtime._hooks._diagnostics.append(  # type: ignore[attr-defined]
+        RuntimeDiagnostic(
+            component="memory",
+            stage="task_started",
+            error_type="OSError",
+            message="boom",
+        )
+    )
+    trace = [StepRecord("navigate", {"target_object": "red_cube"}, "ok", "已导航", 0)]
+
+    report = runtime._build_report(  # type: ignore[attr-defined]
+        Task(GOAL).to(TaskStatus.RUNNING).to(TaskStatus.SUCCEEDED),
+        world,
+        trace,
+        replans=1,
+    )
+
+    assert report.succeeded
+    assert report.trace == tuple(trace)
+    assert report.replans == 1
+    assert report.diagnostics[0].error_type == "OSError"
+
+
+def test_step_executor_builds_step_record_from_attempt_data():
+    from robot_agent.runtime.hooks import RuntimeHooks
+    from robot_agent.runtime.step_executor import StepAttempt, StepExecutor
+
+    grid, world = build_pick_and_place_world()
+    executor = StepExecutor(
+        backend=SimBackend(grid),
+        skills=default_skill_manager(),
+        hooks=RuntimeHooks(),
+        max_retries=0,
+        tools=default_tool_registry(),
+    )
+    step = ToolCall("locate_object", {"object_id": "red_cube"}, step_id="locate")
+    attempt = StepAttempt(
+        result=SkillResult.success("工具调用成功：locate_object", value="red_cube"),
+        world=world,
+        passed=True,
+        resolved_params={"object_id": "red_cube"},
+    )
+
+    record = executor._build_step_record(step, attempt, attempt_index=0)  # type: ignore[attr-defined]
+
+    assert record.skill == "tool:locate_object"
+    assert record.kind == "tool"
+    assert record.step_id == "locate"
+    assert record.output == {"value": "red_cube"}

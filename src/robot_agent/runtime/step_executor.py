@@ -74,52 +74,72 @@ class StepExecutor:
         attempt = 0
         while True:
             outcome = self._try_step(step, world, context)
-            step_name = step_name_for(step)
-            record = StepRecord(
-                skill=step_name,
-                params=outcome.resolved_params,
-                status="ok" if outcome.passed else "failed",
-                message=outcome.result.message,
-                attempt=attempt,
-                step_id=step.step_id,
-                kind="skill" if isinstance(step, SkillCall) else "tool",
-                raw_params=step.params,
-                output=outcome.result.data,
-                error_type=outcome.error_type,
-                failure_kind=outcome.failure_kind,
-            )
+            record = self._build_step_record(step, outcome, attempt_index=attempt)
             trace.append(record)
-            self._hooks.remember(
-                "step",
-                skill=step_name,
-                passed=outcome.passed,
-                message=outcome.result.message,
-                attempt=attempt,
-                failure_kind=outcome.failure_kind,
-            )
-            if outcome.error_type is not None:
-                self._hooks.remember(
-                    "exception",
-                    skill=step_name,
-                    error=outcome.result.message,
-                    attempt=attempt,
-                    error_type=outcome.error_type,
-                    failure_kind=outcome.failure_kind,
-                )
-            self._hooks.emit(
-                RuntimeEvent(
-                    "step_result",
-                    world=outcome.world if outcome.passed else world,
-                    goal=goal,
-                    step=record,
-                )
-            )
+            self._remember_attempt(record, outcome)
+            self._emit_step_result(goal, world, record, outcome)
             if outcome.passed:
                 context.record(step.step_id, outcome.result.data)
                 return outcome.world, True
             attempt += 1
             if attempt > self._max_retries:
                 return world, False
+
+    def _build_step_record(
+        self,
+        step: PlanStep,
+        outcome: StepAttempt,
+        *,
+        attempt_index: int,
+    ) -> StepRecord:
+        return StepRecord(
+            skill=step_name_for(step),
+            params=outcome.resolved_params,
+            status="ok" if outcome.passed else "failed",
+            message=outcome.result.message,
+            attempt=attempt_index,
+            step_id=step.step_id,
+            kind="skill" if isinstance(step, SkillCall) else "tool",
+            raw_params=step.params,
+            output=outcome.result.data,
+            error_type=outcome.error_type,
+            failure_kind=outcome.failure_kind,
+        )
+
+    def _remember_attempt(self, record: StepRecord, outcome: StepAttempt) -> None:
+        self._hooks.remember(
+            "step",
+            skill=record.skill,
+            passed=outcome.passed,
+            message=record.message,
+            attempt=record.attempt,
+            failure_kind=record.failure_kind,
+        )
+        if outcome.error_type is not None:
+            self._hooks.remember(
+                "exception",
+                skill=record.skill,
+                error=record.message,
+                attempt=record.attempt,
+                error_type=outcome.error_type,
+                failure_kind=record.failure_kind,
+            )
+
+    def _emit_step_result(
+        self,
+        goal: str,
+        world: WorldState,
+        record: StepRecord,
+        outcome: StepAttempt,
+    ) -> None:
+        self._hooks.emit(
+            RuntimeEvent(
+                "step_result",
+                world=outcome.world if outcome.passed else world,
+                goal=goal,
+                step=record,
+            )
+        )
 
     def _try_step(
         self, step: PlanStep, world: WorldState, context: ExecutionContext

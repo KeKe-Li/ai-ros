@@ -13,13 +13,60 @@ from __future__ import annotations
 import argparse
 import sys
 import threading
+import webbrowser
 
 from robot_agent.demo.pick_and_place import DEFAULT_GOAL, run_demo
+from robot_agent.display.web import DashboardServer, EventBroadcaster, WebMonitor
 from robot_agent.memory.memory import Memory
 from robot_agent.planning.base import Planner
 from robot_agent.runtime.agent_runtime import RunReport
 
 _STATUS_ICON = {"ok": "✅", "failed": "❌"}
+
+
+def _start_web_dashboard(
+    args: argparse.Namespace,
+) -> tuple[DashboardServer, WebMonitor]:
+    broadcaster = EventBroadcaster()
+    server = DashboardServer(broadcaster, port=args.port)
+    server.start()
+    print(f"上位机仪表盘已启动：{server.url}")
+    web_monitor = WebMonitor(broadcaster, min_interval=args.frame_delay)
+    if args.open:
+        try:
+            webbrowser.open(server.url)
+        except Exception:  # noqa: BLE001 - 打开浏览器失败不影响服务
+            pass
+    return server, web_monitor
+
+
+def _stop_web_dashboard(
+    server: DashboardServer | None, web_monitor: WebMonitor | None
+) -> None:
+    if web_monitor is not None:
+        web_monitor.stop()
+    if server is not None:
+        server.stop()
+
+
+def _wait_forever() -> None:
+    threading.Event().wait()
+
+
+def _wait_for_dashboard_if_needed(
+    args: argparse.Namespace,
+    server: DashboardServer | None,
+    web_monitor: WebMonitor | None,
+) -> None:
+    if server is None:
+        return
+    print(f"\n仪表盘持续服务中：{server.url}  （按 Ctrl+C 退出）")
+    try:
+        _wait_forever()
+    except KeyboardInterrupt:
+        print("\n正在关闭仪表盘…")
+    finally:
+        _stop_web_dashboard(server, web_monitor)
 
 
 def _make_planner(args: argparse.Namespace) -> Planner:
@@ -75,25 +122,8 @@ def _cmd_demo(args: argparse.Namespace) -> int:
     server = None
     web_monitor = None
     if args.web:
-        from robot_agent.display.web import (
-            DashboardServer,
-            EventBroadcaster,
-            WebMonitor,
-        )
-
-        broadcaster = EventBroadcaster()
-        server = DashboardServer(broadcaster, port=args.port)
-        server.start()
-        print(f"上位机仪表盘已启动：{server.url}")
-        web_monitor = WebMonitor(broadcaster, min_interval=args.frame_delay)
+        server, web_monitor = _start_web_dashboard(args)
         observers.append(web_monitor)
-        if args.open:
-            import webbrowser
-
-            try:
-                webbrowser.open(server.url)
-            except Exception:  # noqa: BLE001 - 打开浏览器失败不影响服务
-                pass
 
     report = run_demo(
         inject_failure=args.inject_failure,
@@ -105,16 +135,7 @@ def _cmd_demo(args: argparse.Namespace) -> int:
     if memory is not None:
         print(f"\n[verbose] 短期记忆事件数：{len(memory.episode())}")
 
-    if server is not None:
-        print(f"\n仪表盘持续服务中：{server.url}  （按 Ctrl+C 退出）")
-        try:
-            threading.Event().wait()  # 阻塞，保持服务以便浏览器查看/回放
-        except KeyboardInterrupt:
-            print("\n正在关闭仪表盘…")
-        finally:
-            if web_monitor is not None:
-                web_monitor.stop()
-            server.stop()
+    _wait_for_dashboard_if_needed(args, server, web_monitor)
     return 0 if report.succeeded else 1
 
 

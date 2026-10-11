@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import types
 
+import pytest
+
 from robot_agent.cli import main
 from robot_agent.demo.pick_and_place import run_demo
 from robot_agent.memory.memory import Memory
@@ -143,3 +145,267 @@ def test_start_web_dashboard_returns_handles_and_opens_browser(monkeypatch):
     assert server.started is True
     assert monitor.min_interval == 0.25
     assert opened == [server.url]
+
+
+def test_start_web_dashboard_stops_server_when_monitor_init_raises(monkeypatch):
+    from robot_agent import cli
+
+    calls = []
+
+    class _FakeServer:
+        url = "http://127.0.0.1:8123/"
+
+        def __init__(self, broadcaster, port):
+            self.started = False
+
+        def start(self):
+            self.started = True
+            calls.append("server.start")
+
+        def stop(self):
+            calls.append("server.stop")
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("monitor exploded")
+
+    monkeypatch.setattr(cli, "DashboardServer", _FakeServer)
+    monkeypatch.setattr(cli, "WebMonitor", _boom)
+
+    with pytest.raises(RuntimeError, match="monitor exploded"):
+        cli._start_web_dashboard(
+            types.SimpleNamespace(port=8123, frame_delay=0.1, open=False)
+        )
+
+    assert calls == ["server.start", "server.stop"]
+
+
+def test_start_web_dashboard_does_not_print_started_message_when_monitor_init_raises(
+    monkeypatch, capsys
+):
+    from robot_agent import cli
+
+    calls = []
+
+    class _FakeServer:
+        url = "http://127.0.0.1:8123/"
+
+        def __init__(self, broadcaster, port):
+            self.started = False
+
+        def start(self):
+            self.started = True
+            calls.append("server.start")
+
+        def stop(self):
+            calls.append("server.stop")
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("monitor exploded")
+
+    monkeypatch.setattr(cli, "DashboardServer", _FakeServer)
+    monkeypatch.setattr(cli, "WebMonitor", _boom)
+
+    with pytest.raises(RuntimeError, match="monitor exploded"):
+        cli._start_web_dashboard(
+            types.SimpleNamespace(port=8123, frame_delay=0.1, open=False)
+        )
+
+    out = capsys.readouterr().out
+    assert "上位机仪表盘已启动" not in out
+    assert calls == ["server.start", "server.stop"]
+
+
+def test_cmd_demo_stops_web_resources_when_run_demo_raises(monkeypatch):
+    from robot_agent import cli
+
+    calls = []
+
+    class _FakeServer:
+        url = "http://127.0.0.1:8123/"
+
+        def stop(self):
+            calls.append("server.stop")
+
+    class _FakeMonitor:
+        def stop(self):
+            calls.append("monitor.stop")
+
+    monkeypatch.setattr(
+        cli,
+        "_start_web_dashboard",
+        lambda args: (_FakeServer(), _FakeMonitor()),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_demo",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("demo exploded")),
+    )
+
+    with pytest.raises(RuntimeError, match="demo exploded"):
+        cli._cmd_demo(
+            types.SimpleNamespace(
+                planner="mock",
+                verbose=False,
+                watch=False,
+                web=True,
+                inject_failure=False,
+                frame_delay=0.1,
+                port=8123,
+                open=False,
+                llm_fallback="allow",
+            )
+        )
+
+    assert calls == ["monitor.stop", "server.stop"]
+
+
+def test_cmd_demo_stops_web_resources_when_print_report_raises(monkeypatch):
+    from robot_agent import cli
+
+    calls = []
+
+    class _FakeServer:
+        url = "http://127.0.0.1:8123/"
+
+        def stop(self):
+            calls.append("server.stop")
+
+    class _FakeMonitor:
+        def stop(self):
+            calls.append("monitor.stop")
+
+    monkeypatch.setattr(
+        cli,
+        "_start_web_dashboard",
+        lambda args: (_FakeServer(), _FakeMonitor()),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_demo",
+        lambda **kwargs: types.SimpleNamespace(succeeded=True),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_print_report",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("print exploded")),
+    )
+
+    with pytest.raises(RuntimeError, match="print exploded"):
+        cli._cmd_demo(
+            types.SimpleNamespace(
+                planner="mock",
+                verbose=False,
+                watch=False,
+                web=True,
+                inject_failure=False,
+                frame_delay=0.1,
+                port=8123,
+                open=False,
+                llm_fallback="allow",
+            )
+        )
+
+    assert calls == ["monitor.stop", "server.stop"]
+
+
+def test_cmd_demo_stops_web_resources_when_verbose_output_raises(monkeypatch):
+    from robot_agent import cli
+
+    calls = []
+
+    class _FakeServer:
+        url = "http://127.0.0.1:8123/"
+
+        def stop(self):
+            calls.append("server.stop")
+
+    class _FakeMonitor:
+        def stop(self):
+            calls.append("monitor.stop")
+
+    class _FakeMemory:
+        def episode(self):
+            raise RuntimeError("verbose exploded")
+
+    monkeypatch.setattr(
+        cli,
+        "_start_web_dashboard",
+        lambda args: (_FakeServer(), _FakeMonitor()),
+    )
+    monkeypatch.setattr(cli, "Memory", lambda: _FakeMemory())
+    monkeypatch.setattr(
+        cli,
+        "run_demo",
+        lambda **kwargs: types.SimpleNamespace(succeeded=True),
+    )
+    monkeypatch.setattr(cli, "_print_report", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cli, "_wait_for_dashboard_if_needed", lambda *args, **kwargs: None
+    )
+
+    with pytest.raises(RuntimeError, match="verbose exploded"):
+        cli._cmd_demo(
+            types.SimpleNamespace(
+                planner="mock",
+                verbose=True,
+                watch=False,
+                web=True,
+                inject_failure=False,
+                frame_delay=0.1,
+                port=8123,
+                open=False,
+                llm_fallback="allow",
+            )
+        )
+
+    assert calls == ["monitor.stop", "server.stop"]
+
+
+def test_cmd_demo_web_success_path_stops_resources_only_once(monkeypatch):
+    from robot_agent import cli
+
+    calls = []
+
+    class _FakeServer:
+        url = "http://127.0.0.1:8123/"
+
+        def stop(self):
+            calls.append("server.stop")
+
+    class _FakeMonitor:
+        def stop(self):
+            calls.append("monitor.stop")
+
+    monkeypatch.setattr(
+        cli,
+        "_start_web_dashboard",
+        lambda args: (_FakeServer(), _FakeMonitor()),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_demo",
+        lambda **kwargs: types.SimpleNamespace(succeeded=True),
+    )
+    monkeypatch.setattr(cli, "_print_report", lambda *args, **kwargs: None)
+
+    def _fake_wait(args, server, web_monitor):
+        cli._stop_web_dashboard(server, web_monitor)
+
+    monkeypatch.setattr(cli, "_wait_for_dashboard_if_needed", _fake_wait)
+
+    code = cli._cmd_demo(
+        types.SimpleNamespace(
+            planner="mock",
+            verbose=False,
+            watch=False,
+            web=True,
+            inject_failure=False,
+            frame_delay=0.1,
+            port=8123,
+            open=False,
+            llm_fallback="allow",
+        )
+    )
+
+    assert code == 0
+    assert calls == ["monitor.stop", "server.stop"]

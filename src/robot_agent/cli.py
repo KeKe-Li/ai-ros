@@ -30,8 +30,12 @@ def _start_web_dashboard(
     broadcaster = EventBroadcaster()
     server = DashboardServer(broadcaster, port=args.port)
     server.start()
+    try:
+        web_monitor = WebMonitor(broadcaster, min_interval=args.frame_delay)
+    except Exception:
+        server.stop()
+        raise
     print(f"上位机仪表盘已启动：{server.url}")
-    web_monitor = WebMonitor(broadcaster, min_interval=args.frame_delay)
     if args.open:
         try:
             webbrowser.open(server.url)
@@ -125,15 +129,20 @@ def _cmd_demo(args: argparse.Namespace) -> int:
         server, web_monitor = _start_web_dashboard(args)
         observers.append(web_monitor)
 
-    report = run_demo(
-        inject_failure=args.inject_failure,
-        planner=planner,
-        memory=memory,
-        observers=observers or None,
-    )
-    _print_report(report, DEFAULT_GOAL, args.verbose)
-    if memory is not None:
-        print(f"\n[verbose] 短期记忆事件数：{len(memory.episode())}")
+    try:
+        report = run_demo(
+            inject_failure=args.inject_failure,
+            planner=planner,
+            memory=memory,
+            observers=observers or None,
+        )
+        _print_report(report, DEFAULT_GOAL, args.verbose)
+        if memory is not None:
+            print(f"\n[verbose] 短期记忆事件数：{len(memory.episode())}")
+    except Exception:
+        if server is not None or web_monitor is not None:
+            _stop_web_dashboard(server, web_monitor)
+        raise
 
     _wait_for_dashboard_if_needed(args, server, web_monitor)
     return 0 if report.succeeded else 1

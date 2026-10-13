@@ -59,6 +59,20 @@ class GridWorld:
         return False
 
 
+def build_grid_world(
+    width: int,
+    height: int,
+    objects: Mapping[str, ObjectInfo],
+    *,
+    robot_pose: Pose = Pose(0, 0),
+    fail_actions: Mapping[str, int] | None = None,
+) -> tuple[GridWorld, WorldState]:
+    """构建通用网格世界与初始状态。"""
+    grid = GridWorld(width, height, fail_actions=fail_actions)
+    world = build_world(robot_pose=robot_pose, objects=objects)
+    return grid, world
+
+
 def build_pick_and_place_world(
     fail_actions: Mapping[str, int] | None = None,
 ) -> tuple[GridWorld, WorldState]:
@@ -70,11 +84,15 @@ def build_pick_and_place_world(
     Returns:
         (仿真器, 初始世界状态)
     """
-    grid = GridWorld(10, 10, fail_actions=fail_actions)
     objects: dict[str, ObjectInfo] = {
         "table": ObjectInfo(pose=Pose(5, 5), color=None),
         "box": ObjectInfo(pose=Pose(8, 2), color="brown", is_container=True),
         "red_cube": ObjectInfo(pose=Pose(5, 5), color="red", is_graspable=True),
     }
-    world = build_world(robot_pose=Pose(0, 0), objects=objects)
-    return grid, world
+    return build_grid_world(
+        width=10,
+        height=10,
+        objects=objects,
+        robot_pose=Pose(0, 0),
+        fail_actions=fail_actions,
+    )

@@ -253,6 +253,9 @@ def test_cmd_demo_stops_web_resources_when_run_demo_raises(monkeypatch):
                 port=8123,
                 open=False,
                 llm_fallback="allow",
+                scenario="pick_and_place_basic",
+                list_scenarios=False,
+                artifact_out=None,
             )
         )
 
@@ -302,6 +305,9 @@ def test_cmd_demo_stops_web_resources_when_print_report_raises(monkeypatch):
                 port=8123,
                 open=False,
                 llm_fallback="allow",
+                scenario="pick_and_place_basic",
+                list_scenarios=False,
+                artifact_out=None,
             )
         )
 
@@ -355,6 +361,9 @@ def test_cmd_demo_stops_web_resources_when_verbose_output_raises(monkeypatch):
                 port=8123,
                 open=False,
                 llm_fallback="allow",
+                scenario="pick_and_place_basic",
+                list_scenarios=False,
+                artifact_out=None,
             )
         )
 
@@ -404,8 +413,58 @@ def test_cmd_demo_web_success_path_stops_resources_only_once(monkeypatch):
             port=8123,
             open=False,
             llm_fallback="allow",
+            scenario="pick_and_place_basic",
+            list_scenarios=False,
+            artifact_out=None,
         )
     )
 
     assert code == 0
     assert calls == ["monitor.stop", "server.stop"]
+
+
+def test_demo_basic_scenario_succeeds():
+    report = run_demo(scenario="pick_and_place_basic")
+
+    assert report.succeeded
+    assert report.world.get("red_cube").in_container == "box"
+
+
+def test_demo_retry_once_scenario_recovers():
+    report = run_demo(scenario="pick_and_place_retry_once")
+
+    assert report.succeeded
+    assert any(r.skill == "grasp" and r.status == "failed" for r in report.trace)
+
+
+def test_demo_already_satisfied_succeeds_without_steps():
+    report = run_demo(scenario="already_satisfied")
+
+    assert report.succeeded
+    assert report.world.get("red_cube").in_container == "box"
+    assert len(report.trace) == 0
+
+
+def test_demo_ambiguous_scenario_fails_cleanly():
+    report = run_demo(scenario="ambiguous_red_cube")
+
+    assert not report.succeeded
+    assert report.task.error is not None
+    assert "多个" in report.task.error
+
+
+def test_cli_can_list_scenarios(capsys):
+    code = main(["demo", "--list-scenarios"])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "pick_and_place_basic" in out
+    assert "already_satisfied" in out
+
+
+def test_cli_demo_accepts_scenario(capsys):
+    code = main(["demo", "--scenario", "pick_and_place_basic"])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "结果：成功" in out

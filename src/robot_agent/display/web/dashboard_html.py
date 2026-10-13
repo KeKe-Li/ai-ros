@@ -1,6 +1,6 @@
 """仪表盘前端页面（内嵌 HTML/CSS/JS，零外部资源）。
 
-通过 EventSource('/events') 订阅 SSE，实时渲染网格世界、任务状态与事件日志。
+通过 EventSource('/events') 订阅 SSE，实时渲染网格世界、任务状态、计划与事件日志。
 """
 
 DASHBOARD_HTML = """<!DOCTYPE html>
@@ -19,8 +19,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   header { padding: 16px 24px; border-bottom: 1px solid #1f2937; }
   header h1 { margin: 0; font-size: 18px; }
   header .goal { color: #93c5fd; margin-top: 4px; font-size: 14px; }
-  main { display: flex; gap: 24px; padding: 24px; flex-wrap: wrap; }
+  header .meta { color: #9ca3af; margin-top: 4px; font-size: 13px; }
+  main {
+    display: grid; gap: 24px; padding: 24px;
+    grid-template-columns: minmax(320px, 420px) minmax(260px, 320px) minmax(340px, 1fr);
+    align-items: start;
+  }
   .panel { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 16px; }
+  .panel h3 { margin: 0 0 10px; font-size: 14px; }
   #grid { display: grid; gap: 4px; }
   .cell {
     width: 34px; height: 34px; border-radius: 6px; background: #1f2937;
@@ -33,7 +39,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .cell.cube-blue { background: #2563eb; }
   .cell.cube-green { background: #16a34a; }
   .cell.other { background: #4b5563; }
-  .status { min-width: 260px; }
   .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 13px; }
   .badge.running { background: #1d4ed8; }
   .badge.succeeded { background: #15803d; }
@@ -41,19 +46,31 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .badge.recovering, .badge.pending { background: #a16207; }
   .kv { margin: 8px 0; font-size: 14px; }
   .kv b { color: #9ca3af; font-weight: 500; }
-  #log { max-height: 320px; overflow-y: auto; font-size: 13px; line-height: 1.6; }
+  #log { max-height: 360px; overflow-y: auto; font-size: 13px; line-height: 1.6; }
   #log .ok { color: #86efac; }
   #log .failed { color: #fca5a5; }
   #log .replan { color: #fcd34d; }
   .legend { font-size: 12px; color: #9ca3af; margin-top: 10px; }
   .legend span { display: inline-block; margin-right: 12px; }
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: middle; }
+  #plan { list-style: none; padding: 0; margin: 0; font-size: 13px; display: flex; flex-direction: column; gap: 8px; }
+  #plan li { border: 1px solid #1f2937; border-radius: 10px; padding: 10px 12px; background: #0b1220; }
+  #plan li.current { border-color: #60a5fa; box-shadow: 0 0 0 1px #60a5fa inset; }
+  #plan li.done { border-color: #15803d; }
+  #plan li.failed { border-color: #b91c1c; }
+  #plan li .name { font-weight: 600; }
+  #plan li .meta { color: #9ca3af; margin-top: 4px; font-size: 12px; }
+  #plan-empty { color: #9ca3af; font-size: 13px; }
+  @media (max-width: 1100px) {
+    main { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
 <header>
   <h1>机器人 Agent Runtime · 上位机监控</h1>
   <div class="goal" id="goal">目标：等待连接…</div>
+  <div class="meta" id="scenario">场景：-</div>
 </header>
 <main>
   <section class="panel">
@@ -65,17 +82,30 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <span><i class="dot" style="background:#4b5563"></i>其它</span>
     </div>
   </section>
-  <section class="panel status">
+  <section class="panel">
     <div class="kv"><b>任务状态：</b><span id="status" class="badge pending">-</span></div>
     <div class="kv"><b>当前步骤：</b><span id="step">-</span></div>
     <div class="kv"><b>重规划次数：</b><span id="replans">0</span></div>
     <div class="kv"><b>持有物：</b><span id="holding">（空）</span></div>
-    <h3 style="margin:16px 0 8px;font-size:14px;">事件日志</h3>
+    <div class="kv"><b>计划版本数：</b><span id="plan-versions">0</span></div>
+    <h3 style="margin-top:16px;">计划步骤</h3>
+    <div id="plan-empty">等待计划…</div>
+    <ul id="plan"></ul>
+  </section>
+  <section class="panel">
+    <h3>事件日志</h3>
     <div id="log" class="panel" style="background:#0b1220;"></div>
   </section>
 </main>
 <script>
   var KIND = {task_started:"任务开始", step_result:"步骤执行", replan:"重规划", task_finished:"任务结束"};
+  var state = {
+    plan: [],
+    completed: Object.create(null),
+    failed: Object.create(null),
+    currentStepId: null,
+    planVersions: 0
+  };
   function cubeClass(color){
     if(color === "red") return "cube-red";
     if(color === "blue") return "cube-blue";
@@ -113,12 +143,40 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if(ev.step){
       var retry = ev.step.attempt > 0 ? " [重试#" + ev.step.attempt + "]" : "";
       text += "：" + ev.step.skill + retry + " — " + ev.step.message;
+      if(ev.step.failure_kind){ text += " (" + ev.step.failure_kind + ")"; }
     } else if(ev.message){ text += "：" + ev.message; }
     line.className = cls; line.textContent = text;
     box.appendChild(line); box.scrollTop = box.scrollHeight;
   }
+  function renderPlan(){
+    var list = document.getElementById("plan");
+    var empty = document.getElementById("plan-empty");
+    list.innerHTML = "";
+    if(!state.plan || state.plan.length === 0){
+      empty.style.display = "block";
+      return;
+    }
+    empty.style.display = "none";
+    state.plan.forEach(function(step, index){
+      var item = document.createElement("li");
+      if(step.step_id && state.completed[step.step_id]) item.classList.add("done");
+      if(step.step_id && state.failed[step.step_id]) item.classList.add("failed");
+      if(step.step_id && step.step_id === state.currentStepId) item.classList.add("current");
+      var name = document.createElement("div");
+      name.className = "name";
+      name.textContent = (index + 1) + ". " + step.kind + ":" + step.name;
+      var meta = document.createElement("div");
+      meta.className = "meta";
+      var depends = step.depends_on && step.depends_on.length ? step.depends_on.join(", ") : "[]";
+      meta.textContent = "step_id=" + (step.step_id || "-") + " depends_on=" + depends;
+      item.appendChild(name);
+      item.appendChild(meta);
+      list.appendChild(item);
+    });
+  }
   function apply(ev){
     document.getElementById("goal").textContent = "目标：" + (ev.goal || "-");
+    document.getElementById("scenario").textContent = "场景：" + (ev.scenario || "-");
     renderGrid(ev.world);
     if(ev.task){
       var s = document.getElementById("status");
@@ -129,11 +187,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       var retry = ev.step.attempt > 0 ? " [重试#" + ev.step.attempt + "]" : "";
       var icon = ev.step.status === "ok" ? "✅" : "❌";
       document.getElementById("step").textContent = icon + " " + ev.step.skill + retry;
+      state.currentStepId = ev.current_step_id || ev.step.step_id || null;
+      if(ev.step.step_id){
+        if(ev.step.status === "ok") state.completed[ev.step.step_id] = true;
+        if(ev.step.status === "failed") state.failed[ev.step.step_id] = true;
+      }
     }
+    if(ev.plan){ state.plan = ev.plan; }
+    if(typeof ev.plan_versions === "number"){ state.planVersions = ev.plan_versions; }
+    document.getElementById("plan-versions").textContent = String(state.planVersions || (state.plan ? 1 : 0));
     document.getElementById("replans").textContent = ev.replans;
     document.getElementById("holding").textContent = ev.world.holding || "（空）";
+    renderPlan();
     log(ev);
   }
+  fetch("/state").then(function(resp){ return resp.json(); }).then(function(data){
+    if(data && data.kind){ apply(data); }
+  }).catch(function(){});
   var es = new EventSource("/events");
   es.onmessage = function(e){ try { apply(JSON.parse(e.data)); } catch(err){} };
 </script>

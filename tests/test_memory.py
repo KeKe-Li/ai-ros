@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from robot_agent.core.errors import MemoryCorruptionError
+from robot_agent.memory import memory as memory_module
 from robot_agent.memory.memory import Memory
 
 
@@ -95,3 +96,55 @@ def test_corrupted_store_raises_domain_error(tmp_path):
 
     with pytest.raises(MemoryCorruptionError, match="损坏"):
         Memory(path)
+
+
+def test_recall_nested_value_is_isolated_from_memory_and_disk(tmp_path):
+    path = tmp_path / "memory.json"
+    memory = Memory(path)
+    memory.store("nested", {"items": [1]})
+
+    recalled = memory.recall("nested")
+    recalled["items"].append(2)
+
+    assert memory.recall("nested") == {"items": [1]}
+    assert Memory(path).recall("nested") == {"items": [1]}
+
+
+def test_recall_missing_key_preserves_default_identity():
+    default = {"items": []}
+
+    assert Memory().recall("missing", default) is default
+
+
+@pytest.mark.parametrize("operation", ["write", "fsync", "replace"])
+def test_failed_flush_cleans_temporary_file_and_preserves_state(
+    tmp_path, monkeypatch, operation
+):
+    path = tmp_path / "memory.json"
+    memory = Memory(path)
+    memory.store("ok", 1)
+    original_content = path.read_bytes()
+
+    def fail(*args):
+        raise OSError("模拟持久化失败")
+
+    if operation == "write":
+        original_create = memory_module.tempfile.NamedTemporaryFile
+
+        def create_failing_file(*args, **kwargs):
+            handle = original_create(*args, **kwargs)
+            monkeypatch.setattr(handle, "write", fail)
+            return handle
+
+        monkeypatch.setattr(
+            memory_module.tempfile, "NamedTemporaryFile", create_failing_file
+        )
+    else:
+        monkeypatch.setattr(memory_module.os, operation, fail)
+
+    with pytest.raises(OSError, match="模拟持久化失败"):
+        memory.store("ok", 2)
+
+    assert memory.recall("ok") == 1
+    assert path.read_bytes() == original_content
+    assert list(tmp_path.iterdir()) == [path]

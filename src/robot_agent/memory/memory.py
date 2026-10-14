@@ -13,6 +13,7 @@ import json
 import os
 import tempfile
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -85,8 +86,10 @@ class Memory:
         self._long_term = candidate
 
     def recall(self, key: str, default: Any = None) -> Any:
-        """读取长期记忆。"""
-        return self._long_term.get(key, default)
+        """读取长期记忆的独立副本；键不存在时原样返回默认值。"""
+        if key not in self._long_term:
+            return default
+        return deepcopy(self._long_term[key])
 
     def _flush(self, encoded: str) -> None:
         if self._store_path is not None:
@@ -101,10 +104,10 @@ class Memory:
                     suffix=".tmp",
                     delete=False,
                 ) as handle:
+                    temporary_path = Path(handle.name)
                     handle.write(encoded)
                     handle.flush()
                     os.fsync(handle.fileno())
-                    temporary_path = Path(handle.name)
                 os.replace(temporary_path, self._store_path)
             finally:
                 if temporary_path is not None and temporary_path.exists():

@@ -69,7 +69,10 @@ class WebMonitor:
             try:
                 self._pending.put_nowait(payload)
             except queue.Full:
-                self._pending.get_nowait()
+                try:
+                    self._pending.get_nowait()
+                except queue.Empty:
+                    pass
                 self._pending.put_nowait(payload)
 
     def stop(self) -> None:

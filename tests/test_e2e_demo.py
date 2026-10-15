@@ -108,10 +108,11 @@ def test_wait_for_dashboard_if_needed_stops_web_resources_on_keyboard_interrupt(
     assert calls == ["monitor.stop", "server.stop"]
 
 
-def test_start_web_dashboard_returns_handles_and_opens_browser(monkeypatch):
+def test_start_web_dashboard_returns_handles_and_opens_browser(monkeypatch, capsys):
     from robot_agent import cli
 
     opened = []
+    calls = []
 
     class _FakeServer:
         def __init__(self, broadcaster, port):
@@ -120,6 +121,7 @@ def test_start_web_dashboard_returns_handles_and_opens_browser(monkeypatch):
 
         def start(self):
             self.started = True
+            calls.append("server.start")
 
         def stop(self):
             pass
@@ -128,13 +130,19 @@ def test_start_web_dashboard_returns_handles_and_opens_browser(monkeypatch):
         def __init__(self, broadcaster, min_interval):
             self.broadcaster = broadcaster
             self.min_interval = min_interval
+            calls.append("monitor.init")
 
         def stop(self):
             pass
 
     monkeypatch.setattr(cli, "DashboardServer", _FakeServer)
     monkeypatch.setattr(cli, "WebMonitor", _FakeMonitor)
-    monkeypatch.setattr(cli.webbrowser, "open", opened.append)
+
+    def open_browser(url):
+        calls.append("browser.open")
+        opened.append(url)
+
+    monkeypatch.setattr(cli.webbrowser, "open", open_browser)
 
     server, monitor = cli._start_web_dashboard(
         types.SimpleNamespace(port=8123, frame_delay=0.25, open=True)
@@ -145,6 +153,8 @@ def test_start_web_dashboard_returns_handles_and_opens_browser(monkeypatch):
     assert server.started is True
     assert monitor.min_interval == 0.25
     assert opened == [server.url]
+    assert calls == ["server.start", "monitor.init", "browser.open"]
+    assert f"上位机仪表盘已启动：{server.url}" in capsys.readouterr().out
 
 
 def test_start_web_dashboard_stops_server_when_monitor_init_raises(monkeypatch):
@@ -171,12 +181,16 @@ def test_start_web_dashboard_stops_server_when_monitor_init_raises(monkeypatch):
     monkeypatch.setattr(cli, "DashboardServer", _FakeServer)
     monkeypatch.setattr(cli, "WebMonitor", _boom)
 
+    opened = []
+    monkeypatch.setattr(cli.webbrowser, "open", opened.append)
+
     with pytest.raises(RuntimeError, match="monitor exploded"):
         cli._start_web_dashboard(
-            types.SimpleNamespace(port=8123, frame_delay=0.1, open=False)
+            types.SimpleNamespace(port=8123, frame_delay=0.1, open=True)
         )
 
     assert calls == ["server.start", "server.stop"]
+    assert opened == []
 
 
 def test_start_web_dashboard_does_not_print_started_message_when_monitor_init_raises(

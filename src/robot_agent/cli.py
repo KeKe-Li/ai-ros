@@ -41,13 +41,16 @@ def _start_dashboard_server(
     broadcaster = EventBroadcaster()
     server = DashboardServer(broadcaster, port=args.port)
     server.start()
+    return broadcaster, server
+
+
+def _announce_dashboard(args: argparse.Namespace, server: DashboardServer) -> None:
     print(f"上位机仪表盘已启动：{server.url}")
     if args.open:
         try:
             webbrowser.open(server.url)
         except Exception:  # noqa: BLE001 - 打开浏览器失败不影响服务
             pass
-    return broadcaster, server
 
 
 def _start_web_dashboard(
@@ -59,6 +62,7 @@ def _start_web_dashboard(
     except Exception:
         server.stop()
         raise
+    _announce_dashboard(args, server)
     return server, web_monitor
 
 
@@ -264,6 +268,7 @@ def _cmd_replay(args: argparse.Namespace) -> int:
     server = None
     if args.web:
         broadcaster, server = _start_dashboard_server(args)
+        _announce_dashboard(args, server)
         publisher = threading.Thread(
             target=_publish_replay_payloads,
             args=(broadcaster, artifact, args.frame_delay),

@@ -25,6 +25,45 @@ from robot_agent.world.grid_world import build_pick_and_place_world
 GOAL = "把红色方块放到箱子里"
 
 
+def _simulate_consumer_draining_full_queue(monkeypatch, pending):
+    original_get = pending.get_nowait
+
+    def drain_then_get():
+        original_get()
+        return original_get()
+
+    monkeypatch.setattr(pending, "get_nowait", drain_then_get)
+
+
+def test_broadcaster_handles_consumer_draining_full_queue(monkeypatch):
+    bus = EventBroadcaster(queue_limit=1)
+    pending = bus.subscribe()
+    bus.publish({"n": 1})
+    _simulate_consumer_draining_full_queue(monkeypatch, pending)
+
+    bus.publish({"n": 2})
+
+    assert pending.get(block=False) == {"n": 2}
+    assert bus.dropped_events() == 0
+    assert bus.latest() == {"n": 2}
+
+
+def test_web_monitor_handles_consumer_draining_full_queue(monkeypatch):
+    monkeypatch.setattr(WebMonitor, "_publish_loop", lambda self: None)
+    monitor = WebMonitor(EventBroadcaster(), min_interval=0.01, queue_limit=1)
+    try:
+        monitor.on_event(_sample_event("task_started"))
+        pending = monitor._pending
+        assert pending is not None
+        _simulate_consumer_draining_full_queue(monkeypatch, pending)
+
+        monitor.on_event(_sample_event("task_finished"))
+
+        assert pending.get(block=False)["kind"] == "task_finished"
+    finally:
+        monitor.stop()
+
+
 def _sample_event(kind="task_started"):
     _, world = build_pick_and_place_world()
     return RuntimeEvent(
@@ -47,6 +86,7 @@ def test_event_to_dict_serializes_world_and_step():
     assert {"red_cube", "box", "table"} <= ids
     assert payload["step"]["skill"] == "grasp"
     assert payload["step"]["step_id"] == ""
+    assert payload.get("plan") is None
     # 整体可 JSON 序列化
     assert json.loads(json.dumps(payload))["goal"] == GOAL
 

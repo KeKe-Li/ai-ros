@@ -108,10 +108,11 @@ def test_wait_for_dashboard_if_needed_stops_web_resources_on_keyboard_interrupt(
     assert calls == ["monitor.stop", "server.stop"]
 
 
-def test_start_web_dashboard_returns_handles_and_opens_browser(monkeypatch):
+def test_start_web_dashboard_returns_handles_and_opens_browser(monkeypatch, capsys):
     from robot_agent import cli
 
     opened = []
+    calls = []
 
     class _FakeServer:
         def __init__(self, broadcaster, port):
@@ -120,6 +121,7 @@ def test_start_web_dashboard_returns_handles_and_opens_browser(monkeypatch):
 
         def start(self):
             self.started = True
+            calls.append("server.start")
 
         def stop(self):
             pass
@@ -128,13 +130,19 @@ def test_start_web_dashboard_returns_handles_and_opens_browser(monkeypatch):
         def __init__(self, broadcaster, min_interval):
             self.broadcaster = broadcaster
             self.min_interval = min_interval
+            calls.append("monitor.init")
 
         def stop(self):
             pass
 
     monkeypatch.setattr(cli, "DashboardServer", _FakeServer)
     monkeypatch.setattr(cli, "WebMonitor", _FakeMonitor)
-    monkeypatch.setattr(cli.webbrowser, "open", opened.append)
+
+    def open_browser(url):
+        calls.append("browser.open")
+        opened.append(url)
+
+    monkeypatch.setattr(cli.webbrowser, "open", open_browser)
 
     server, monitor = cli._start_web_dashboard(
         types.SimpleNamespace(port=8123, frame_delay=0.25, open=True)
@@ -145,6 +153,8 @@ def test_start_web_dashboard_returns_handles_and_opens_browser(monkeypatch):
     assert server.started is True
     assert monitor.min_interval == 0.25
     assert opened == [server.url]
+    assert calls == ["server.start", "monitor.init", "browser.open"]
+    assert f"上位机仪表盘已启动：{server.url}" in capsys.readouterr().out
 
 
 def test_start_web_dashboard_stops_server_when_monitor_init_raises(monkeypatch):
@@ -171,12 +181,16 @@ def test_start_web_dashboard_stops_server_when_monitor_init_raises(monkeypatch):
     monkeypatch.setattr(cli, "DashboardServer", _FakeServer)
     monkeypatch.setattr(cli, "WebMonitor", _boom)
 
+    opened = []
+    monkeypatch.setattr(cli.webbrowser, "open", opened.append)
+
     with pytest.raises(RuntimeError, match="monitor exploded"):
         cli._start_web_dashboard(
-            types.SimpleNamespace(port=8123, frame_delay=0.1, open=False)
+            types.SimpleNamespace(port=8123, frame_delay=0.1, open=True)
         )
 
     assert calls == ["server.start", "server.stop"]
+    assert opened == []
 
 
 def test_start_web_dashboard_does_not_print_started_message_when_monitor_init_raises(
@@ -253,6 +267,9 @@ def test_cmd_demo_stops_web_resources_when_run_demo_raises(monkeypatch):
                 port=8123,
                 open=False,
                 llm_fallback="allow",
+                scenario="pick_and_place_basic",
+                list_scenarios=False,
+                artifact_out=None,
             )
         )
 
@@ -302,6 +319,9 @@ def test_cmd_demo_stops_web_resources_when_print_report_raises(monkeypatch):
                 port=8123,
                 open=False,
                 llm_fallback="allow",
+                scenario="pick_and_place_basic",
+                list_scenarios=False,
+                artifact_out=None,
             )
         )
 
@@ -355,6 +375,9 @@ def test_cmd_demo_stops_web_resources_when_verbose_output_raises(monkeypatch):
                 port=8123,
                 open=False,
                 llm_fallback="allow",
+                scenario="pick_and_place_basic",
+                list_scenarios=False,
+                artifact_out=None,
             )
         )
 
@@ -404,8 +427,58 @@ def test_cmd_demo_web_success_path_stops_resources_only_once(monkeypatch):
             port=8123,
             open=False,
             llm_fallback="allow",
+            scenario="pick_and_place_basic",
+            list_scenarios=False,
+            artifact_out=None,
         )
     )
 
     assert code == 0
     assert calls == ["monitor.stop", "server.stop"]
+
+
+def test_demo_basic_scenario_succeeds():
+    report = run_demo(scenario="pick_and_place_basic")
+
+    assert report.succeeded
+    assert report.world.get("red_cube").in_container == "box"
+
+
+def test_demo_retry_once_scenario_recovers():
+    report = run_demo(scenario="pick_and_place_retry_once")
+
+    assert report.succeeded
+    assert any(r.skill == "grasp" and r.status == "failed" for r in report.trace)
+
+
+def test_demo_already_satisfied_succeeds_without_steps():
+    report = run_demo(scenario="already_satisfied")
+
+    assert report.succeeded
+    assert report.world.get("red_cube").in_container == "box"
+    assert len(report.trace) == 0
+
+
+def test_demo_ambiguous_scenario_fails_cleanly():
+    report = run_demo(scenario="ambiguous_red_cube")
+
+    assert not report.succeeded
+    assert report.task.error is not None
+    assert "多个" in report.task.error
+
+
+def test_cli_can_list_scenarios(capsys):
+    code = main(["demo", "--list-scenarios"])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "pick_and_place_basic" in out
+    assert "already_satisfied" in out
+
+
+def test_cli_demo_accepts_scenario(capsys):
+    code = main(["demo", "--scenario", "pick_and_place_basic"])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "结果：成功" in out

@@ -42,9 +42,13 @@ class EventBroadcaster:
                     subscriber.put_nowait(payload)
                 except queue.Full:
                     # 慢订阅者只保留最新状态，绝不阻塞运行时生产者。
-                    subscriber.get_nowait()
+                    try:
+                        subscriber.get_nowait()
+                    except queue.Empty:
+                        pass
+                    else:
+                        self._dropped_events += 1
                     subscriber.put_nowait(payload)
-                    self._dropped_events += 1
 
     def subscribe(self) -> queue.Queue[dict[str, Any]]:
         """新增一个订阅队列，并先灌入历史事件供回放。"""

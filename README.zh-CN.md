@@ -18,9 +18,9 @@
  └──────────┘         └──────────────┘             └──────┬───────┘
      ▲                      ▲  监控/恢复                   │ 物理动作
      │ 重规划                │                             ▼
- ┌────────────── AgentRuntime 主循环 ───────────┐   ┌──────────────┐
- │ 理解→调度→执行→监控→异常恢复→目标验证          │   │ RobotBackend │
- └──────┬────────────────────────┬──────────────┘   │ Sim / ROS2*  │
+ ┌────────────── AgentRuntime 主循环 ────────────┐    ┌──────────────┐
+ │ 理解→调度→执行→监控→异常恢复→目标验证             │    │ RobotBackend │ 
+ └──────┬────────────────────────┬──────────────┘    │ Sim / ROS2*  │
   Memory / ToolRegistry     事件总线(RuntimeObserver) └──────┬───────┘
                                  │                          ▼
                         ┌────────┴────────┐          GridWorld 世界状态
@@ -59,6 +59,16 @@ python -m robot_agent.cli demo --watch --frame-delay 0.6
 # Web 图形界面上位机（浏览器查看，零外部依赖）
 python -m robot_agent.cli demo --web --open --frame-delay 0.6
 # 然后打开 http://127.0.0.1:8000/
+
+# 查看内置场景并运行指定场景
+python -m robot_agent.cli demo --list-scenarios
+python -m robot_agent.cli demo --scenario pick_and_place_retry_once --verbose
+
+# 导出一次运行的 artifact，稍后再回放
+python -m robot_agent.cli demo --scenario pick_and_place_retry_once \
+  --artifact-out /tmp/robot-agent-artifact.json
+python -m robot_agent.cli replay /tmp/robot-agent-artifact.json --verbose
+python -m robot_agent.cli replay /tmp/robot-agent-artifact.json --web --open --frame-delay 0.2
 
 # 注入一次抓取故障，观察异常恢复（重试）
 python -m robot_agent.cli demo --inject-failure

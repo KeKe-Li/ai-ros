@@ -61,6 +61,16 @@ python -m robot_agent.cli demo --watch --frame-delay 0.6
 python -m robot_agent.cli demo --web --open --frame-delay 0.6
 # then open http://127.0.0.1:8000/
 
+# List built-in scenarios and run a specific one
+python -m robot_agent.cli demo --list-scenarios
+python -m robot_agent.cli demo --scenario pick_and_place_retry_once --verbose
+
+# Export a run artifact, then replay it later
+python -m robot_agent.cli demo --scenario pick_and_place_retry_once \
+  --artifact-out /tmp/robot-agent-artifact.json
+python -m robot_agent.cli replay /tmp/robot-agent-artifact.json --verbose
+python -m robot_agent.cli replay /tmp/robot-agent-artifact.json --web --open --frame-delay 0.2
+
 # Inject one grasp failure to observe recovery (retry)
 python -m robot_agent.cli demo --inject-failure
 

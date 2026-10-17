@@ -265,18 +265,24 @@ def test_agent_runtime_build_report_preserves_trace_and_diagnostics():
         )
     )
     trace = [StepRecord("navigate", {"target_object": "red_cube"}, "ok", "已导航", 0)]
+    plan_history = [(SkillCall("navigate", {"target_object": "red_cube"}),)]
 
     report = runtime._build_report(  # type: ignore[attr-defined]
-        Task(GOAL).to(TaskStatus.RUNNING).to(TaskStatus.SUCCEEDED),
-        world,
-        trace,
+        task=Task(GOAL).to(TaskStatus.RUNNING).to(TaskStatus.SUCCEEDED),
+        world=world.with_holding("red_cube"),
+        initial_world=world,
+        trace=trace,
         replans=1,
+        plan_history=plan_history,
     )
 
     assert report.succeeded
     assert report.trace == tuple(trace)
     assert report.replans == 1
     assert report.diagnostics[0].error_type == "OSError"
+    assert report.initial_world is world
+    assert report.world.holding == "red_cube"
+    assert report.plan_history == tuple(plan_history)
 
 
 def test_step_executor_builds_step_record_from_attempt_data():

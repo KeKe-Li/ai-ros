@@ -109,6 +109,17 @@ def _make_planner(args: argparse.Namespace) -> Planner:
     raise SystemExit(f"未知的 planner：{name}（可选 mock / llm）")
 
 
+def _format_final_state_line(container: str | None, holding: str | None) -> str:
+    """终态行文案：live 报告与 artifact 回放共用，保证两条路径表述一致。"""
+    return (
+        f"终态：red_cube 所在容器 = {container or '（未入箱）'}；机械臂持有 = {holding}"
+    )
+
+
+def _format_result_line(succeeded: bool) -> str:
+    return "结果：成功 ✅" if succeeded else "结果：失败 ❌"
+
+
 def _print_report(report: RunReport, goal: str, verbose: bool) -> None:
     print(f"目标：{goal}")
     print(
@@ -122,9 +133,9 @@ def _print_report(report: RunReport, goal: str, verbose: bool) -> None:
         retry = f" [重试#{rec.attempt}]" if rec.attempt > 0 else ""
         print(f"  {i:>2}. {icon} {rec.skill}{retry} — {rec.message}")
     cube = report.world.get("red_cube")
-    where = cube.in_container if cube and cube.in_container else "（未入箱）"
-    print(f"终态：red_cube 所在容器 = {where}；机械臂持有 = {report.world.holding}")
-    print("结果：成功 ✅" if report.succeeded else "结果：失败 ❌")
+    container = cube.in_container if cube else None
+    print(_format_final_state_line(container, report.world.holding))
+    print(_format_result_line(report.succeeded))
     if verbose:
         print("\n[verbose] 世界物体快照：")
         for oid in sorted(report.world.objects):
@@ -176,13 +187,9 @@ def _print_replay(artifact: dict[str, Any], verbose: bool, frame_delay: float) -
         if frame_delay > 0:
             time.sleep(frame_delay)
 
-    where = cube.get("in_container") if isinstance(cube, dict) else None
-    print(f"终态：red_cube 所在容器 = {where or '（未入箱）'}；机械臂持有 = {holding}")
-    print(
-        "结果：成功 ✅"
-        if artifact.get("task_status") == "succeeded"
-        else "结果：失败 ❌"
-    )
+    container = cube.get("in_container") if isinstance(cube, dict) else None
+    print(_format_final_state_line(container, holding))
+    print(_format_result_line(artifact.get("task_status") == "succeeded"))
 
     if verbose:
         print("\n[verbose] 计划历史：")
@@ -193,9 +200,7 @@ def _print_replay(artifact: dict[str, Any], verbose: bool, frame_delay: float) -
                 name = step.get("name", "unknown")
                 step_id = step.get("step_id", "")
                 depends_on = step.get("depends_on", [])
-                print(
-                    f"      {kind}:{name} step_id={step_id} depends_on={depends_on}"
-                )
+                print(f"      {kind}:{name} step_id={step_id} depends_on={depends_on}")
 
 
 def _publish_replay_payloads(
@@ -343,7 +348,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--web", action="store_true", help="启用 Web 图形界面展示 artifact 回放"
     )
     replay.add_argument("--port", type=int, default=8000, help="Web 仪表盘端口")
-    replay.add_argument("--open", action="store_true", help="自动在默认浏览器打开仪表盘")
+    replay.add_argument(
+        "--open", action="store_true", help="自动在默认浏览器打开仪表盘"
+    )
     replay.set_defaults(func=_cmd_replay)
     return parser
 

@@ -13,28 +13,49 @@ from robot_agent.runtime.events import RuntimeEvent
 from robot_agent.world.state import WorldState
 
 
-def _world_to_dict(world: WorldState) -> dict[str, Any]:
-    poses = [info.pose for info in world.objects.values()] + [world.robot_pose]
-    width = max((p.x for p in poses), default=0) + 1
-    height = max((p.y for p in poses), default=0) + 1
+def build_dashboard_world(
+    *,
+    robot_x: int,
+    robot_y: int,
+    holding: str | None,
+    objects: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """组装仪表盘世界载荷（宽高 = max(机器人, 各物体坐标) + 1）。
+
+    objects 需为已规范化的列表，每项含 id/x/y/color/graspable/container/
+    in_container，由各调用方从自身数据源（活动 WorldState 或 artifact dict）
+    抽取后传入。集中此处可保证 live 与 replay 两条路径的仪表盘世界结构一致。
+    """
+    width = max([robot_x, *(obj["x"] for obj in objects)]) + 1
+    height = max([robot_y, *(obj["y"] for obj in objects)]) + 1
     return {
         "width": width,
         "height": height,
-        "robot": {"x": world.robot_pose.x, "y": world.robot_pose.y},
-        "holding": world.holding,
-        "objects": [
-            {
-                "id": oid,
-                "x": info.pose.x,
-                "y": info.pose.y,
-                "color": info.color,
-                "graspable": info.is_graspable,
-                "container": info.is_container,
-                "in_container": info.in_container,
-            }
-            for oid, info in sorted(world.objects.items())
-        ],
+        "robot": {"x": robot_x, "y": robot_y},
+        "holding": holding,
+        "objects": objects,
     }
+
+
+def _world_to_dict(world: WorldState) -> dict[str, Any]:
+    objects = [
+        {
+            "id": oid,
+            "x": info.pose.x,
+            "y": info.pose.y,
+            "color": info.color,
+            "graspable": info.is_graspable,
+            "container": info.is_container,
+            "in_container": info.in_container,
+        }
+        for oid, info in sorted(world.objects.items())
+    ]
+    return build_dashboard_world(
+        robot_x=world.robot_pose.x,
+        robot_y=world.robot_pose.y,
+        holding=world.holding,
+        objects=objects,
+    )
 
 
 def event_to_dict(event: RuntimeEvent) -> dict[str, Any]:

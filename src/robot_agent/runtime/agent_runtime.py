@@ -22,7 +22,7 @@ from typing import Protocol
 from robot_agent.backends.base import RobotBackend
 from robot_agent.core.errors import PlanningStageFailure
 from robot_agent.core.task import Task, TaskStatus
-from robot_agent.planning.base import PlanStep, Planner
+from robot_agent.planning.base import Planner, PlanStep
 from robot_agent.planning.validator import PlanValidator
 from robot_agent.runtime.context import ExecutionContext
 from robot_agent.runtime.events import (
@@ -84,6 +84,20 @@ class _ExecutionLoopFailure(Exception):
     replans: int
 
 
+@dataclass(frozen=True)
+class _RunState:
+    """一次 run() 的运行不变量与累积缓冲。
+
+    frozen 仅冻结属性引用；trace / plan_history 仍是执行过程中持续 append 的
+    缓冲列表，沿用既有写法。集中这批不变量可避免在多层私有方法间反复透传。
+    """
+
+    goal: str
+    initial_world: WorldState
+    trace: list[StepRecord]
+    plan_history: list[tuple[PlanStep, ...]]
+
+
 class AgentRuntime:
     """机器人上层智能主循环。"""
 
@@ -133,56 +147,31 @@ class AgentRuntime:
     def run(self, goal: str, world: WorldState) -> RunReport:
         """执行一个目标，返回运行报告。"""
         self._hooks.reset()
-        initial_world = world
+        state = _RunState(
+            goal=goal,
+            initial_world=world,
+            trace=[],
+            plan_history=[],
+        )
         task = Task(goal).to(TaskStatus.RUNNING)
         self._start_task(goal, world, task)
-        trace: list[StepRecord] = []
-        plan_history: list[tuple[PlanStep, ...]] = []
 
         try:
             prepared = self._prepare_plan(goal, world)
-            self._remember_plan(plan_history, prepared)
+            self._remember_plan(state, prepared)
         except PlanningStageFailure as exc:
-            return self._failure_report(
-                task,
-                world,
-                initial_world,
-                trace,
-                plan_history,
-                0,
-                goal,
-                exc.stage,
-                exc.cause,
-            )
+            return self._failure_report(state, task, world, 0, exc.stage, exc.cause)
         except Exception as exc:  # noqa: BLE001 - 兜底保留运行时边界
-            return self._failure_report(
-                task,
-                world,
-                initial_world,
-                trace,
-                plan_history,
-                0,
-                goal,
-                "规划失败",
-                exc,
-            )
+            return self._failure_report(state, task, world, 0, "规划失败", exc)
 
         goal_spec = prepared.goal_spec
         try:
             task, world, replans = self._execute_plan_loop(
-                goal, world, task, goal_spec, prepared.steps, trace, plan_history
+                state, world, task, goal_spec, prepared.steps
             )
         except _ExecutionLoopFailure as exc:
             return self._failure_report(
-                exc.task,
-                exc.world,
-                initial_world,
-                trace,
-                plan_history,
-                exc.replans,
-                goal,
-                exc.stage,
-                exc.cause,
+                state, exc.task, exc.world, exc.replans, exc.stage, exc.cause
             )
 
         if not task.is_terminal:
@@ -190,15 +179,7 @@ class AgentRuntime:
                 task = self._finalize_task(goal, task, world, goal_spec)
             except Exception as exc:  # noqa: BLE001 - 验证器属于可替换的运行时边界
                 return self._failure_report(
-                    task,
-                    world,
-                    initial_world,
-                    trace,
-                    plan_history,
-                    replans,
-                    goal,
-                    "目标验证失败",
-                    exc,
+                    state, task, world, replans, "目标验证失败", exc
                 )
 
         self._hooks.emit(
@@ -206,14 +187,7 @@ class AgentRuntime:
                 "task_finished", world=world, goal=goal, task=task, replans=replans
             )
         )
-        return self._build_report(
-            task=task,
-            world=world,
-            initial_world=initial_world,
-            trace=trace,
-            replans=replans,
-            plan_history=plan_history,
-        )
+        return self._build_report(state, task, world, replans)
 
     def _start_task(self, goal: str, world: WorldState, task: Task) -> None:
         self._hooks.remember("task_started", goal=goal)
@@ -225,26 +199,23 @@ class AgentRuntime:
         return self._runtime_planner.prepare(goal, world)
 
     @staticmethod
-    def _remember_plan(
-        plan_history: list[tuple[PlanStep, ...]], prepared: PreparedPlan
-    ) -> None:
-        plan_history.append(tuple(prepared.steps))
+    def _remember_plan(state: _RunState, prepared: PreparedPlan) -> None:
+        state.plan_history.append(tuple(prepared.steps))
 
     def _execute_plan_loop(
         self,
-        goal: str,
+        state: _RunState,
         world: WorldState,
         task: Task,
         goal_spec: object,
         steps: list[object],
-        trace: list[StepRecord],
-        plan_history: list[tuple[PlanStep, ...]],
     ) -> tuple[Task, WorldState, int]:
+        goal = state.goal
         replans = 0
         while True:
             context = ExecutionContext()
             world, failed = self._step_executor.execute(
-                steps, world, trace, goal, context
+                steps, world, state.trace, goal, context
             )
             if failed is None:
                 return task, world, replans
@@ -262,7 +233,7 @@ class AgentRuntime:
                 prepared = self._runtime_planner.prepare(
                     goal, world, goal_spec=goal_spec
                 )
-                self._remember_plan(plan_history, prepared)
+                self._remember_plan(state, prepared)
             except PlanningStageFailure as exc:
                 raise _ExecutionLoopFailure(
                     stage="重规划失败",
@@ -325,32 +296,27 @@ class AgentRuntime:
 
     def _build_report(
         self,
+        state: _RunState,
         task: Task,
         world: WorldState,
-        initial_world: WorldState,
-        trace: list[StepRecord],
         replans: int,
-        plan_history: list[tuple[PlanStep, ...]],
     ) -> RunReport:
         return RunReport(
             task=task,
             world=world,
-            initial_world=initial_world,
-            trace=tuple(trace),
+            initial_world=state.initial_world,
+            trace=tuple(state.trace),
             replans=replans,
             diagnostics=self._hooks.diagnostics,
-            plan_history=tuple(plan_history),
+            plan_history=tuple(state.plan_history),
         )
 
     def _failure_report(
         self,
+        state: _RunState,
         task: Task,
         world: WorldState,
-        initial_world: WorldState,
-        trace: list[StepRecord],
-        plan_history: list[tuple[PlanStep, ...]],
         replans: int,
-        goal: str,
         stage: str,
         exc: Exception,
     ) -> RunReport:
@@ -362,17 +328,10 @@ class AgentRuntime:
             RuntimeEvent(
                 "task_finished",
                 world=world,
-                goal=goal,
+                goal=state.goal,
                 task=failed_task,
                 replans=replans,
                 message=error,
             )
         )
-        return self._build_report(
-            task=failed_task,
-            world=world,
-            initial_world=initial_world,
-            trace=trace,
-            replans=replans,
-            plan_history=plan_history,
-        )
+        return self._build_report(state, failed_task, world, replans)

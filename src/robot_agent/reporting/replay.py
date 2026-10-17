@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from robot_agent.display.web.serializer import build_dashboard_world
+
 
 def replay_trace(artifact: dict[str, Any]) -> list[dict[str, Any]]:
     trace = artifact.get("trace", [])
@@ -36,8 +38,6 @@ def _artifact_world_to_dashboard_world(world: dict[str, Any]) -> dict[str, Any]:
     objects = world.get("objects", {}) if isinstance(world, dict) else {}
 
     object_list: list[dict[str, Any]] = []
-    max_x = robot_x
-    max_y = robot_y
     if isinstance(objects, dict):
         for object_id, info in sorted(objects.items()):
             if not isinstance(info, dict):
@@ -45,8 +45,6 @@ def _artifact_world_to_dashboard_world(world: dict[str, Any]) -> dict[str, Any]:
             pose = info.get("pose", {}) if isinstance(info, dict) else {}
             x = int(pose.get("x", 0)) if isinstance(pose, dict) else 0
             y = int(pose.get("y", 0)) if isinstance(pose, dict) else 0
-            max_x = max(max_x, x)
-            max_y = max(max_y, y)
             object_list.append(
                 {
                     "id": object_id,
@@ -59,13 +57,12 @@ def _artifact_world_to_dashboard_world(world: dict[str, Any]) -> dict[str, Any]:
                 }
             )
 
-    return {
-        "width": max_x + 1,
-        "height": max_y + 1,
-        "robot": {"x": robot_x, "y": robot_y},
-        "holding": world.get("holding") if isinstance(world, dict) else None,
-        "objects": object_list,
-    }
+    return build_dashboard_world(
+        robot_x=robot_x,
+        robot_y=robot_y,
+        holding=world.get("holding") if isinstance(world, dict) else None,
+        objects=object_list,
+    )
 
 
 def build_replay_payloads(artifact: dict[str, Any]) -> list[dict[str, Any]]:

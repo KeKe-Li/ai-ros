@@ -245,7 +245,7 @@ def test_runtime_hooks_collects_observer_diagnostic_without_stopping_other_obser
 
 
 def test_agent_runtime_build_report_preserves_trace_and_diagnostics():
-    from robot_agent.runtime.agent_runtime import AgentRuntime
+    from robot_agent.runtime.agent_runtime import AgentRuntime, _RunState
     from robot_agent.runtime.events import StepRecord
     from robot_agent.runtime.hooks import RuntimeHooks
 
@@ -266,14 +266,18 @@ def test_agent_runtime_build_report_preserves_trace_and_diagnostics():
     )
     trace = [StepRecord("navigate", {"target_object": "red_cube"}, "ok", "已导航", 0)]
     plan_history = [(SkillCall("navigate", {"target_object": "red_cube"}),)]
-
-    report = runtime._build_report(  # type: ignore[attr-defined]
-        task=Task(GOAL).to(TaskStatus.RUNNING).to(TaskStatus.SUCCEEDED),
-        world=world.with_holding("red_cube"),
+    state = _RunState(
+        goal=GOAL,
         initial_world=world,
         trace=trace,
-        replans=1,
         plan_history=plan_history,
+    )
+
+    report = runtime._build_report(  # type: ignore[attr-defined]
+        state,
+        Task(GOAL).to(TaskStatus.RUNNING).to(TaskStatus.SUCCEEDED),
+        world.with_holding("red_cube"),
+        1,
     )
 
     assert report.succeeded

@@ -64,9 +64,10 @@ class InContainerGoal(GoalSpec):
 def parse_goal(text: str, world: WorldState) -> GoalSpec:
     """把目标串结合当前世界解析为 GoalSpec。无法解析时抛 PlanningError。"""
     lowered = text.lower()
+    resolver = EntityResolver(world)
     color = _parse_color(lowered)
-    container_id = _find_container(lowered, world)
-    object_id = _find_target_object(lowered, color, container_id, world)
+    container_id = _find_container(lowered, world, resolver)
+    object_id = _find_target_object(lowered, color, container_id, world, resolver)
     return InContainerGoal(
         text=text, object_id=object_id, container_id=container_id, color=color
     )
@@ -82,13 +83,13 @@ def _parse_color(text: str) -> str | None:
     return None
 
 
-def _find_container(text: str, world: WorldState) -> str:
+def _find_container(text: str, world: WorldState, resolver: EntityResolver) -> str:
     containers = [
         oid for oid, info in sorted(world.objects.items()) if info.is_container
     ]
     if not containers:
         raise PlanningError("世界中不存在可放置的容器")
-    explicit = EntityResolver(world).resolve(text, containers, "容器")
+    explicit = resolver.resolve(text, containers, "容器")
     if explicit is not None:
         return explicit
     if not any(contains_token(text, kw) for kw in _CONTAINER_KEYWORDS):
@@ -99,10 +100,14 @@ def _find_container(text: str, world: WorldState) -> str:
 
 
 def _find_target_object(
-    text: str, color: str | None, container_id: str, world: WorldState
+    text: str,
+    color: str | None,
+    container_id: str,
+    world: WorldState,
+    resolver: EntityResolver,
 ) -> str:
     all_graspable = world.find_objects(graspable=True)
-    explicit = EntityResolver(world).resolve(text, all_graspable, "物体")
+    explicit = resolver.resolve(text, all_graspable, "物体")
     if explicit is not None:
         return explicit
     candidates = world.find_objects(color=color, graspable=True)

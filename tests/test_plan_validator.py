@@ -206,3 +206,30 @@ def test_validator_rejects_self_dependency_by_step_id():
 
     with pytest.raises(PlanningError, match="非法依赖"):
         _validator().validate(plan, goal, world)
+
+
+def test_validator_rejects_dependency_cycle():
+    # Arrange：step_a <-> step_b 互相依赖，构成循环
+    _, world = build_pick_and_place_world()
+    goal = parse_goal(GOAL, world)
+    plan = Plan(
+        GOAL,
+        (
+            SkillCall(
+                "detect",
+                {"object_id": "red_cube", "graspable": True},
+                depends_on=("step_b",),
+                step_id="step_a",
+            ),
+            SkillCall(
+                "detect",
+                {"object_id": "red_cube", "graspable": True},
+                depends_on=("step_a",),
+                step_id="step_b",
+            ),
+        ),
+    )
+
+    # Act / Assert：循环依赖经 topological_order 检出，抛 PlanningError
+    with pytest.raises(PlanningError, match="循环依赖"):
+        _validator().validate(plan, goal, world)

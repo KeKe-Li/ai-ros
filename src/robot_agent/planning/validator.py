@@ -51,7 +51,7 @@ class PlanValidator:
             raise PlanningError("计划中存在重复 step_id")
 
         graph = build_dependency_graph(plan.steps, _dependency_error)
-        topological_order(plan.steps, _dependency_error)
+        topological_order(plan.steps, _dependency_error, _cycle_error, graph=graph)
         id_to_index = graph.id_to_index
         for index, step in enumerate(plan.steps):
             if not isinstance(step.params, Mapping):
@@ -103,8 +103,7 @@ class PlanValidator:
             return
         if step.skill == "navigate":
             self._validate_known_entity(step, "target_object", world)
-            value = step.params.get("target_object")
-            entity_id = value.expected if isinstance(value, OutputRef) else value
+            entity_id = _entity_id(step.params.get("target_object"))
             if entity_id not in {goal.object_id, goal.container_id}:
                 raise PlanningError(
                     f"步骤 {step.step_id} 的导航目标与任务无关：{entity_id!r}"
@@ -135,8 +134,7 @@ class PlanValidator:
     def _validate_known_entity(
         step: SkillCall, parameter: str, world: WorldState
     ) -> None:
-        value = step.params.get(parameter)
-        entity_id = value.expected if isinstance(value, OutputRef) else value
+        entity_id = _entity_id(step.params.get(parameter))
         if not isinstance(entity_id, str) or world.get(entity_id) is None:
             raise PlanningError(
                 f"步骤 {step.step_id} 引用了不存在的实体：{entity_id!r}"
@@ -144,13 +142,17 @@ class PlanValidator:
 
     @staticmethod
     def _validate_goal_entity(step: SkillCall, parameter: str, expected: str) -> None:
-        value = step.params.get(parameter)
-        entity_id = value.expected if isinstance(value, OutputRef) else value
+        entity_id = _entity_id(step.params.get(parameter))
         if entity_id != expected:
             raise PlanningError(
                 f"步骤 {step.step_id} 的 {parameter} 不符合目标物体或容器："
                 f"{entity_id!r} != {expected!r}"
             )
+
+
+def _entity_id(value: object) -> object:
+    """取出参数对应的实体 ID；OutputRef 以其 expected 占位做静态判定。"""
+    return value.expected if isinstance(value, OutputRef) else value
 
 
 def _iter_refs(value: Any) -> Iterator[OutputRef]:
@@ -166,3 +168,7 @@ def _iter_refs(value: Any) -> Iterator[OutputRef]:
 
 def _dependency_error(step_id: str, dependency: str) -> PlanningError:
     return PlanningError(f"步骤 {step_id} 存在非法依赖：{dependency}")
+
+
+def _cycle_error() -> PlanningError:
+    return PlanningError("计划存在循环依赖")

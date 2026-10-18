@@ -21,9 +21,13 @@ class TaskManager:
         使用 Kahn 算法做拓扑排序；发现非法依赖或循环依赖时抛 SchedulingError。
         同层就绪节点按原始下标升序出队，保证结果确定可复现。
         """
-        order = topological_order(plan.steps, _dependency_error)
+        order = topological_order(plan.steps, _dependency_error, _cycle_error)
         return [plan.steps[index] for index in order]
 
 
 def _dependency_error(step_id: str, dependency: str) -> SchedulingError:
     return SchedulingError(f"步骤 {step_id} 存在非法依赖：{dependency}")
+
+
+def _cycle_error() -> SchedulingError:
+    return SchedulingError("计划存在循环依赖，无法调度")

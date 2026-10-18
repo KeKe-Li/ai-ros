@@ -21,6 +21,7 @@ class DependencyGraph:
 
 
 ErrorFactory = Callable[[str, str], ErrorT]
+CycleErrorFactory = Callable[[], ErrorT]
 
 
 def build_dependency_graph(
@@ -48,10 +49,19 @@ def build_dependency_graph(
 
 
 def topological_order(
-    steps: Sequence[PlanStep], error_factory: ErrorFactory[ErrorT]
+    steps: Sequence[PlanStep],
+    error_factory: ErrorFactory[ErrorT],
+    cycle_error_factory: CycleErrorFactory[ErrorT],
+    *,
+    graph: DependencyGraph | None = None,
 ) -> list[int]:
-    """返回稳定的拓扑排序；循环依赖时抛调用方指定异常。"""
-    graph = build_dependency_graph(steps, error_factory)
+    """返回稳定的拓扑排序；循环依赖时抛 `cycle_error_factory()` 指定的异常。
+
+    调用方可传入已构建的 `graph` 以复用依赖图，避免对同一计划重复构图；
+    循环与非法依赖两类错误均由调用方显式提供工厂，本模块保持异常类型无关。
+    """
+    if graph is None:
+        graph = build_dependency_graph(steps, error_factory)
     indegree = list(graph.indegree)
     ready = sorted(index for index, degree in enumerate(indegree) if degree == 0)
     order: list[int] = []
@@ -65,18 +75,6 @@ def topological_order(
                 ready.append(following)
         ready.sort()
 
-    if len(order) != len(steps):
-        raise _cycle_error(error_factory)
+    if len(order) != len(graph.indegree):
+        raise cycle_error_factory()
     return order
-
-
-def _cycle_error(error_factory: ErrorFactory[ErrorT]) -> ErrorT:
-    try:
-        raise error_factory("", "")
-    except Exception as sample:  # noqa: BLE001 - 仅用于保留异常类型，由调用方决定文案
-        message = str(sample)
-        if "非法依赖" in message:
-            if sample.__class__.__name__ == "SchedulingError":
-                return sample.__class__("计划存在循环依赖，无法调度")
-            return sample.__class__("计划存在循环依赖")
-        return sample.__class__("计划存在循环依赖")

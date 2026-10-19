@@ -61,8 +61,12 @@ def builtin_scenarios() -> dict[str, ScenarioSpec]:
             robot_pose=Pose(0, 0),
             objects=(
                 ScenarioObject("box", Pose(8, 2), color="brown", is_container=True),
-                ScenarioObject("red_cube_1", Pose(5, 5), color="red", is_graspable=True),
-                ScenarioObject("red_cube_2", Pose(6, 5), color="red", is_graspable=True),
+                ScenarioObject(
+                    "red_cube_1", Pose(5, 5), color="red", is_graspable=True
+                ),
+                ScenarioObject(
+                    "red_cube_2", Pose(6, 5), color="red", is_graspable=True
+                ),
             ),
         ),
     }

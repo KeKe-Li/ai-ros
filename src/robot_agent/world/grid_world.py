@@ -64,12 +64,15 @@ def build_grid_world(
     height: int,
     objects: Mapping[str, ObjectInfo],
     *,
-    robot_pose: Pose = Pose(0, 0),
+    robot_pose: Pose | None = None,
     fail_actions: Mapping[str, int] | None = None,
 ) -> tuple[GridWorld, WorldState]:
-    """构建通用网格世界与初始状态。"""
+    """构建通用网格世界与初始状态；robot_pose 默认机器人原点 (0, 0)。"""
     grid = GridWorld(width, height, fail_actions=fail_actions)
-    world = build_world(robot_pose=robot_pose, objects=objects)
+    world = build_world(
+        robot_pose=robot_pose if robot_pose is not None else Pose(0, 0),
+        objects=objects,
+    )
     return grid, world
 
 

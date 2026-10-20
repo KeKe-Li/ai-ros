@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Any
 
+from robot_agent.core.io import atomic_write_text
 from robot_agent.reporting.serializer import (
     diagnostic_to_dict,
     plan_step_to_dict,
@@ -36,8 +35,7 @@ def build_artifact(
         "trace": [step_record_to_dict(item) for item in report.trace],
         "diagnostics": [diagnostic_to_dict(item) for item in report.diagnostics],
         "plan_history": [
-            [plan_step_to_dict(step) for step in plan]
-            for plan in report.plan_history
+            [plan_step_to_dict(step) for step in plan] for plan in report.plan_history
         ],
     }
 
@@ -48,32 +46,12 @@ def save_artifact(
     *,
     scenario: str | None = None,
 ) -> Path:
-    artifact_path = Path(path)
     encoded = json.dumps(
         build_artifact(report, scenario=scenario),
         ensure_ascii=False,
         indent=2,
     )
-    artifact_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=artifact_path.parent,
-            prefix=f".{artifact_path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-            temporary_path = Path(handle.name)
-        os.replace(temporary_path, artifact_path)
-    finally:
-        if temporary_path is not None and temporary_path.exists():
-            temporary_path.unlink()
-    return artifact_path
+    return atomic_write_text(path, encoded)
 
 
 def load_artifact(path: str | Path) -> dict[str, Any]:

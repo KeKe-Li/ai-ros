@@ -10,8 +10,6 @@ Memory 是有状态的累加装置（非流经业务逻辑的数据模型），e
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -20,6 +18,7 @@ from typing import Any
 
 from robot_agent.core.errors import MemoryCorruptionError
 from robot_agent.core.frozen import freeze_mapping, to_jsonable
+from robot_agent.core.io import atomic_write_text
 
 
 @dataclass(frozen=True)
@@ -93,22 +92,4 @@ class Memory:
 
     def _flush(self, encoded: str) -> None:
         if self._store_path is not None:
-            self._store_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary_path: Path | None = None
-            try:
-                with tempfile.NamedTemporaryFile(
-                    mode="w",
-                    encoding="utf-8",
-                    dir=self._store_path.parent,
-                    prefix=f".{self._store_path.name}.",
-                    suffix=".tmp",
-                    delete=False,
-                ) as handle:
-                    temporary_path = Path(handle.name)
-                    handle.write(encoded)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(temporary_path, self._store_path)
-            finally:
-                if temporary_path is not None and temporary_path.exists():
-                    temporary_path.unlink()
+            atomic_write_text(self._store_path, encoded)

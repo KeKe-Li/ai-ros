@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from robot_agent.core import io as io_module
 from robot_agent.core.errors import MemoryCorruptionError
-from robot_agent.memory import memory as memory_module
 from robot_agent.memory.memory import Memory
 
 
@@ -129,7 +129,7 @@ def test_failed_flush_cleans_temporary_file_and_preserves_state(
         raise OSError("模拟持久化失败")
 
     if operation == "write":
-        original_create = memory_module.tempfile.NamedTemporaryFile
+        original_create = io_module.tempfile.NamedTemporaryFile
 
         def create_failing_file(*args, **kwargs):
             handle = original_create(*args, **kwargs)
@@ -137,10 +137,10 @@ def test_failed_flush_cleans_temporary_file_and_preserves_state(
             return handle
 
         monkeypatch.setattr(
-            memory_module.tempfile, "NamedTemporaryFile", create_failing_file
+            io_module.tempfile, "NamedTemporaryFile", create_failing_file
         )
     else:
-        monkeypatch.setattr(memory_module.os, operation, fail)
+        monkeypatch.setattr(io_module.os, operation, fail)
 
     with pytest.raises(OSError, match="模拟持久化失败"):
         memory.store("ok", 2)

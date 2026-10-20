@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 
 from robot_agent.backends.base import RobotBackend
 from robot_agent.core.types import Pose, SkillResult
@@ -68,7 +69,7 @@ class SimBackend(RobotBackend):
             return SkillResult.failure("抓取瞬时故障（注入）"), world
         # 抓取成功：持有该物，物体脱离任何容器
         picked = world.with_holding(object_id).with_object(
-            object_id, _replace_container(world, object_id, None)
+            object_id, replace(obj, in_container=None)
         )
         return SkillResult.success(f"已抓取 {object_id}"), picked
 
@@ -87,19 +88,6 @@ class SimBackend(RobotBackend):
         held_id = world.holding
         held = world.get(held_id)
         # 放置成功：物体进入容器并落位到容器坐标，机械臂释放
-        placed_obj = _copy_with(held, pose=container.pose, in_container=container_id)
+        placed_obj = replace(held, pose=container.pose, in_container=container_id)
         placed = world.with_object(held_id, placed_obj).with_holding(None)
         return SkillResult.success(f"已将 {held_id} 放入 {container_id}"), placed
-
-
-def _replace_container(world: WorldState, obj_id: str, container: str | None):
-    """返回 obj 的副本，仅修改 in_container 字段。"""
-    obj = world.objects[obj_id]
-    return _copy_with(obj, in_container=container)
-
-
-def _copy_with(obj, **changes):
-    """ObjectInfo 的不可变更新辅助。"""
-    from dataclasses import replace
-
-    return replace(obj, **changes)

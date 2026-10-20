@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+
+from robot_agent.core import io as io_module
 from robot_agent.demo.pick_and_place import run_demo
 from robot_agent.reporting import build_artifact, load_artifact, save_artifact
 
@@ -45,3 +48,26 @@ def test_failed_run_artifact_preserves_error(tmp_path):
     assert loaded["task_status"] == "failed"
     assert "多个" in (loaded["task_error"] or "")
     assert loaded["trace"] == []
+
+
+def test_save_artifact_cleans_temporary_file_when_write_fails(tmp_path, monkeypatch):
+    # Arrange：写入阶段失败，验证不残留临时文件、不生成目标文件
+    report = run_demo(scenario="pick_and_place_basic")
+    artifact_path = tmp_path / "basic.json"
+    original_create = io_module.tempfile.NamedTemporaryFile
+
+    def create_failing_file(*args, **kwargs):
+        handle = original_create(*args, **kwargs)
+        monkeypatch.setattr(
+            handle, "write", lambda *a: (_ for _ in ()).throw(OSError("写入失败"))
+        )
+        return handle
+
+    monkeypatch.setattr(io_module.tempfile, "NamedTemporaryFile", create_failing_file)
+
+    # Act / Assert
+    with pytest.raises(OSError, match="写入失败"):
+        save_artifact(report, artifact_path, scenario="pick_and_place_basic")
+
+    assert not artifact_path.exists()
+    assert list(tmp_path.iterdir()) == []

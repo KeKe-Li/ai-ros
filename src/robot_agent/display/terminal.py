@@ -13,6 +13,7 @@ import sys
 import time
 from typing import TextIO
 
+from robot_agent.display.grid import grid_extent
 from robot_agent.runtime.events import RuntimeEvent
 from robot_agent.world.state import WorldState
 
@@ -29,9 +30,7 @@ _CLEAR_HOME = "\x1b[2J\x1b[H"  # 清屏并将光标移到左上角
 def _grid_size(world: WorldState) -> tuple[int, int]:
     """由世界中的坐标推断渲染网格尺寸（无需依赖仿真器边界）。"""
     poses = [info.pose for info in world.objects.values()] + [world.robot_pose]
-    width = max((p.x for p in poses), default=0) + 1
-    height = max((p.y for p in poses), default=0) + 1
-    return width, height
+    return grid_extent((p.x for p in poses), (p.y for p in poses))
 
 
 def _cell_symbol(world: WorldState, x: int, y: int) -> str:

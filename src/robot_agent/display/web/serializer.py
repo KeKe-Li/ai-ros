@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from robot_agent.core.frozen import to_jsonable
+from robot_agent.display.grid import grid_extent
 from robot_agent.runtime.events import RuntimeEvent
 from robot_agent.world.state import WorldState
 
@@ -26,8 +27,10 @@ def build_dashboard_world(
     in_container，由各调用方从自身数据源（活动 WorldState 或 artifact dict）
     抽取后传入。集中此处可保证 live 与 replay 两条路径的仪表盘世界结构一致。
     """
-    width = max([robot_x, *(obj["x"] for obj in objects)]) + 1
-    height = max([robot_y, *(obj["y"] for obj in objects)]) + 1
+    width, height = grid_extent(
+        [robot_x, *(obj["x"] for obj in objects)],
+        [robot_y, *(obj["y"] for obj in objects)],
+    )
     return {
         "width": width,
         "height": height,

@@ -23,6 +23,7 @@ from robot_agent.backends.base import RobotBackend
 from robot_agent.core.errors import PlanningStageFailure
 from robot_agent.core.task import Task, TaskStatus
 from robot_agent.planning.base import Planner, PlanStep
+from robot_agent.planning.goal import GoalSpec
 from robot_agent.planning.validator import PlanValidator
 from robot_agent.runtime.context import ExecutionContext
 from robot_agent.runtime.events import (
@@ -195,7 +196,7 @@ class AgentRuntime:
             RuntimeEvent("task_started", world=world, goal=goal, task=task)
         )
 
-    def _prepare_plan(self, goal: str, world: WorldState):
+    def _prepare_plan(self, goal: str, world: WorldState) -> PreparedPlan:
         return self._runtime_planner.prepare(goal, world)
 
     @staticmethod
@@ -207,8 +208,8 @@ class AgentRuntime:
         state: _RunState,
         world: WorldState,
         task: Task,
-        goal_spec: object,
-        steps: list[object],
+        goal_spec: GoalSpec,
+        steps: list[PlanStep],
     ) -> tuple[Task, WorldState, int]:
         goal = state.goal
         replans = 0
@@ -261,7 +262,7 @@ class AgentRuntime:
         world: WorldState,
         task: Task,
         replans: int,
-        failed_step,
+        failed_step: PlanStep,
     ) -> Task:
         recovering_task = task.to(TaskStatus.RECOVERING)
         failed_name = step_name_for(failed_step)
@@ -283,7 +284,7 @@ class AgentRuntime:
         goal: str,
         task: Task,
         world: WorldState,
-        goal_spec,
+        goal_spec: GoalSpec,
     ) -> Task:
         goal_satisfied = self._monitor.verify_goal(goal_spec, world)
         if goal_satisfied:

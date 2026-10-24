@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from typing import get_type_hints
+
 from robot_agent.backends.sim_backend import SimBackend
 from robot_agent.core.task import Task, TaskStatus
 from robot_agent.core.types import SkillResult
 from robot_agent.planning.base import OutputRef, SkillCall, ToolCall
+from robot_agent.planning.goal import GoalSpec
 from robot_agent.planning.mock_planner import MockPlanner
 from robot_agent.runtime import ExecutionContext
 from robot_agent.runtime.agent_runtime import MemoryFailurePolicy
@@ -221,6 +224,105 @@ def test_step_executor_classifies_postcondition_failure_without_exception():
     assert trace[0].error_type is None
 
 
+def test_step_executor_preserves_failed_attempt_world_on_postcondition_failure():
+    from robot_agent.runtime.hooks import RuntimeHooks
+    from robot_agent.runtime.step_executor import StepExecutor
+
+    class _FalsePostconditionSkill:
+        name = "navigate"
+        required_params = ()
+
+        def capability_spec(self):
+            return default_skill_manager().get("navigate").capability_spec()
+
+        def preconditions(self, world, params):
+            return True
+
+        def execute(self, backend, world, params):
+            from robot_agent.core.types import SkillResult
+
+            target = world.get(params["target_object"]).pose
+            result, new_world = backend.navigate_to(world, target)
+            return SkillResult.success("已导航") if result.ok else result, new_world
+
+        def postconditions(self, before, after, params, result):
+            return False
+
+    grid, world = build_pick_and_place_world()
+    manager = default_skill_manager()
+    manager._skills["navigate"] = _FalsePostconditionSkill()  # type: ignore[assignment]
+    executor = StepExecutor(
+        backend=SimBackend(grid),
+        skills=manager,
+        hooks=RuntimeHooks(),
+        max_retries=0,
+        tools=default_tool_registry(),
+    )
+    trace = []
+
+    new_world, ok = executor.run_with_retry(
+        SkillCall("navigate", {"target_object": "red_cube"}, step_id="navigate_object"),
+        world,
+        trace,
+        GOAL,
+        ExecutionContext(),
+    )
+
+    assert ok is False
+    assert new_world.robot_pose == world.get("red_cube").pose
+    assert trace[0].failure_kind == "postcondition_failed"
+
+
+def test_step_executor_emits_failed_attempt_world_on_postcondition_failure():
+    from robot_agent.runtime.hooks import RuntimeHooks
+    from robot_agent.runtime.step_executor import StepExecutor
+
+    class _FalsePostconditionSkill:
+        name = "navigate"
+        required_params = ()
+
+        def capability_spec(self):
+            return default_skill_manager().get("navigate").capability_spec()
+
+        def preconditions(self, world, params):
+            return True
+
+        def execute(self, backend, world, params):
+            from robot_agent.core.types import SkillResult
+
+            target = world.get(params["target_object"]).pose
+            result, new_world = backend.navigate_to(world, target)
+            return SkillResult.success("已导航") if result.ok else result, new_world
+
+        def postconditions(self, before, after, params, result):
+            return False
+
+    grid, world = build_pick_and_place_world()
+    manager = default_skill_manager()
+    manager._skills["navigate"] = _FalsePostconditionSkill()  # type: ignore[assignment]
+    recorder = _Recorder()
+    executor = StepExecutor(
+        backend=SimBackend(grid),
+        skills=manager,
+        hooks=RuntimeHooks(observers=[recorder]),
+        max_retries=0,
+        tools=default_tool_registry(),
+    )
+    trace = []
+
+    _, ok = executor.run_with_retry(
+        SkillCall("navigate", {"target_object": "red_cube"}, step_id="navigate_object"),
+        world,
+        trace,
+        GOAL,
+        ExecutionContext(),
+    )
+
+    assert ok is False
+    assert recorder.events[0].kind == "step_result"
+    assert recorder.events[0].world.robot_pose == world.get("red_cube").pose
+
+
 class _BoomObserver:
     def on_event(self, event) -> None:
         raise RuntimeError("observer exploded")
@@ -315,3 +417,22 @@ def test_step_executor_builds_step_record_from_attempt_data():
     assert record.kind == "tool"
     assert record.step_id == "locate"
     assert record.output == {"value": "red_cube"}
+
+
+def test_agent_runtime_private_method_annotations_use_domain_types():
+    from robot_agent.planning.base import PlanStep
+    from robot_agent.runtime.agent_runtime import AgentRuntime
+    from robot_agent.runtime.planner_pipeline import PreparedPlan
+    from robot_agent.world.state import WorldState
+
+    prepare_hints = get_type_hints(AgentRuntime._prepare_plan)
+    execute_hints = get_type_hints(AgentRuntime._execute_plan_loop)
+    announce_hints = get_type_hints(AgentRuntime._announce_replan)
+    finalize_hints = get_type_hints(AgentRuntime._finalize_task)
+
+    assert prepare_hints["world"] is WorldState
+    assert prepare_hints["return"] is PreparedPlan
+    assert execute_hints["goal_spec"] is GoalSpec
+    assert execute_hints["steps"] == list[PlanStep]
+    assert announce_hints["failed_step"] is PlanStep
+    assert finalize_hints["goal_spec"] is GoalSpec

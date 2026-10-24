@@ -77,13 +77,13 @@ class StepExecutor:
             record = self._build_step_record(step, outcome, attempt_index=attempt)
             trace.append(record)
             self._remember_attempt(record, outcome)
-            self._emit_step_result(goal, world, record, outcome)
+            self._emit_step_result(goal, record, outcome)
             if outcome.passed:
                 context.record(step.step_id, outcome.result.data)
                 return outcome.world, True
             attempt += 1
             if attempt > self._max_retries:
-                return world, False
+                return outcome.world, False
 
     def _build_step_record(
         self,
@@ -128,14 +128,13 @@ class StepExecutor:
     def _emit_step_result(
         self,
         goal: str,
-        world: WorldState,
         record: StepRecord,
         outcome: StepAttempt,
     ) -> None:
         self._hooks.emit(
             RuntimeEvent(
                 "step_result",
-                world=outcome.world if outcome.passed else world,
+                world=outcome.world,
                 goal=goal,
                 step=record,
             )

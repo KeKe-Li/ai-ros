@@ -436,3 +436,46 @@ def test_agent_runtime_private_method_annotations_use_domain_types():
     assert execute_hints["steps"] == list[PlanStep]
     assert announce_hints["failed_step"] is PlanStep
     assert finalize_hints["goal_spec"] is GoalSpec
+
+
+def test_cli_print_report_delegates_to_reporting_console(monkeypatch):
+    from robot_agent import cli
+
+    calls = []
+    report = object()
+
+    class _Console:
+        @staticmethod
+        def print_report(report, goal, verbose):
+            calls.append((report, goal, verbose))
+
+    monkeypatch.setattr(cli, "reporting_console", _Console)
+
+    cli._print_report(report, "g", True)
+
+    assert calls == [(report, "g", True)]
+
+
+def test_cli_replay_helpers_delegate_to_reporting_console(monkeypatch):
+    from robot_agent import cli
+
+    calls = []
+
+    class _Console:
+        @staticmethod
+        def print_replay(artifact, verbose, frame_delay):
+            calls.append(("print", artifact, verbose, frame_delay))
+
+        @staticmethod
+        def publish_replay_payloads(broadcaster, artifact, frame_delay):
+            calls.append(("publish", broadcaster, artifact, frame_delay))
+
+    monkeypatch.setattr(cli, "reporting_console", _Console)
+
+    cli._print_replay({"task_status": "succeeded"}, False, 0.2)
+    cli._publish_replay_payloads("bus", {"task_status": "succeeded"}, 0.3)
+
+    assert calls == [
+        ("print", {"task_status": "succeeded"}, False, 0.2),
+        ("publish", "bus", {"task_status": "succeeded"}, 0.3),
+    ]
